@@ -34,7 +34,7 @@ The bot trades daily candles: it decides after a market close and buys at the ne
 open. It stays out when the model is not confident or the market is not trending up,
 so days or weeks with no trades are normal.
 
-To start over with a fresh account: `.venv\Scripts\apex paper init`.
+To start over with a fresh account: `.venv\Scripts\python -m apex paper init`.
 
 ## Commands
 
