@@ -1,0 +1,24 @@
+# The watchlist APEX scans. Add or remove symbols freely.
+# Symbols that fail to download are reported and skipped, never guessed.
+
+[equity]
+provider = "yahoo"
+benchmark = "^NSEI"
+# Large, liquid NSE names. The ".NS" suffix is added automatically.
+symbols = [
+  "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "BHARTIARTL", "SBIN", "ITC",
+  "LT", "HINDUNILVR", "KOTAKBANK", "AXISBANK", "BAJFINANCE", "MARUTI", "SUNPHARMA",
+  "HCLTECH", "TITAN", "ASIANPAINT", "ULTRACEMCO", "NTPC", "POWERGRID", "ONGC",
+  "M&M", "WIPRO", "ADANIPORTS", "ADANIENT", "JSWSTEEL", "TATASTEEL", "COALINDIA",
+  "NESTLEIND", "BAJAJFINSV", "BAJAJ-AUTO", "TECHM", "GRASIM", "HINDALCO", "DRREDDY",
+  "CIPLA", "EICHERMOT", "HEROMOTOCO", "BRITANNIA", "APOLLOHOSP", "DIVISLAB",
+  "TATACONSUM", "SBILIFE", "HDFCLIFE", "INDUSINDBK", "BPCL", "SHRIRAMFIN", "TRENT", "BEL",
+]
+
+[crypto]
+provider = "binance"
+benchmark = "BTCUSDT"
+symbols = [
+  "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+  "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT",
+]
