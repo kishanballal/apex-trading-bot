@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
-import polars as pl
+import pandas as pd
 import pytest
 
 from apex.data.base import candles_from_rows
@@ -21,7 +21,7 @@ def make_candles(
     volume: float = 2_000_000.0,
     end: datetime = NOW - timedelta(days=1),
     breakout: bool = False,
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     """Synthetic daily candles ending at `end`. With breakout=True the last bar is a
     high-volume close above the prior 20-day high."""
     rng = np.random.default_rng(seed)
@@ -51,5 +51,5 @@ def now() -> datetime:
 
 
 @pytest.fixture
-def uptrend() -> pl.DataFrame:
+def uptrend() -> pd.DataFrame:
     return make_candles(breakout=True)

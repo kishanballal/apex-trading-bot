@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-import polars as pl
+import pandas as pd
 
 from apex.analysis.regime import UNKNOWN, regime_at
 from apex.backtest.engine import BacktestResult, Trade, _Series
@@ -82,13 +82,13 @@ def is_turning_up(last: dict, prev: dict) -> bool:
 
 def run_ladder(
     groups: list[UniverseGroup],
-    candles: dict[str, pl.DataFrame],
+    candles: dict[str, pd.DataFrame],
     config: LadderConfig | None = None,
     *,
     costs: CostModel | None = None,
 ) -> BacktestResult:
     cfg, costs = config or LadderConfig(), costs or CostModel()
-    empty = pl.DataFrame()
+    empty = pd.DataFrame()
     series: dict[str, _Series] = {}
     bench_of: dict[str, _Series] = {}
     fx_of: dict[str, float] = {}

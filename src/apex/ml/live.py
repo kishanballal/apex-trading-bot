@@ -13,7 +13,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-import polars as pl
+import pandas as pd
+
+from apex.frame import dates
 
 from apex.ml.dataset import FEATURES, to_matrix
 from apex.ml.walkforward import CALIBRATION_FRACTION, _calibrate
@@ -31,11 +33,11 @@ class ModelBundle:
     n_samples: int
     features: list[str]
 
-    def win_probability(self, data: pl.DataFrame) -> np.ndarray:
+    def win_probability(self, data: pd.DataFrame) -> np.ndarray:
         raw = self.classifier.predict_proba(to_matrix(data))[:, 1]
         return self.calibrator.predict(raw)
 
-    def forecast_returns(self, data: pl.DataFrame) -> dict[int, np.ndarray]:
+    def forecast_returns(self, data: pd.DataFrame) -> dict[int, np.ndarray]:
         """Expected log return per horizon, in trading days."""
         x = to_matrix(data)
         return {h: m.predict(x) for h, m in self.forecasters.items()}
@@ -53,32 +55,33 @@ class ModelBundle:
         return joblib.load(path)
 
 
-def add_forward_returns(data: pl.DataFrame, candles: dict[str, pl.DataFrame]) -> pl.DataFrame:
+def add_forward_returns(data: pd.DataFrame, candles: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Join log(close[t+h] / close[t]) for each horizon. Null where the future is unknown."""
     parts = []
-    for symbol in data["symbol"].unique().to_list():
-        frame = candles[symbol].sort("ts")
-        c = pl.col("close")
-        parts.append(frame.select(
-            pl.lit(symbol).alias("symbol"), pl.col("ts").dt.date().alias("date"),
-            *[(c.shift(-h) / c).log().alias(f"fwd_{h}") for h in HORIZONS],
-        ))
-    return data.join(pl.concat(parts), on=["symbol", "date"], how="left")
+    for symbol in data["symbol"].unique().tolist():
+        frame = candles[symbol].sort_values("ts")
+        c = frame["close"].reset_index(drop=True)
+        part = pd.DataFrame({"symbol": symbol, "date": dates(frame["ts"]).reset_index(drop=True)})
+        for h in HORIZONS:
+            part[f"fwd_{h}"] = np.log(c.shift(-h) / c)
+        parts.append(part.drop_duplicates("date", keep="last"))
+    return data.merge(pd.concat(parts, ignore_index=True), on=["symbol", "date"], how="left")
 
 
-def train_bundle(data: pl.DataFrame, candles: dict[str, pl.DataFrame]) -> ModelBundle:
+def train_bundle(data: pd.DataFrame, candles: dict[str, pd.DataFrame]) -> ModelBundle:
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression, Ridge
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
 
-    labelled = data.filter(pl.col("y").is_not_null()).sort("ts")
-    if labelled.height < 2000:
-        raise ValueError(f"only {labelled.height} labelled samples; fetch more history first")
-    split = int(labelled.height * (1 - CALIBRATION_FRACTION))
-    cal_start = labelled["ts"][split]
-    fit = labelled.head(split).filter(pl.col("label_end") < cal_start)
-    cal = labelled.tail(labelled.height - split)
+    labelled = data[data["y"].notna()].sort_values("ts", kind="stable").reset_index(drop=True)
+    if len(labelled) < 2000:
+        raise ValueError(f"only {len(labelled)} labelled samples; fetch more history first")
+    split = int(len(labelled) * (1 - CALIBRATION_FRACTION))
+    cal_start = labelled["ts"].iloc[split]
+    fit = labelled.head(split)
+    fit = fit[fit["label_end"] < cal_start]
+    cal = labelled.tail(len(labelled) - split)
     classifier = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
                                LogisticRegression(C=0.1, max_iter=500))
     classifier.fit(to_matrix(fit), fit["y"].to_numpy())
@@ -87,13 +90,13 @@ def train_bundle(data: pl.DataFrame, candles: dict[str, pl.DataFrame]) -> ModelB
     with_fwd = add_forward_returns(data, candles)
     forecasters = {}
     for h in HORIZONS:
-        rows = with_fwd.filter(pl.col(f"fwd_{h}").is_not_null())
+        rows = with_fwd[with_fwd[f"fwd_{h}"].notna()]
         model = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(), Ridge(alpha=100.0))
         # Clip extreme moves so a few crypto spikes do not dominate the fit.
         model.fit(to_matrix(rows), np.clip(rows[f"fwd_{h}"].to_numpy(), -0.5, 0.5))
         forecasters[h] = model
     return ModelBundle(classifier, calibrator, forecasters, datetime.now(UTC),
-                       labelled["label_end"].max(), labelled.height, list(FEATURES))
+                       labelled["label_end"].max().to_pydatetime(), len(labelled), list(FEATURES))
 
 
 def forecast_path(last_close: float, returns_by_h: dict[int, float], atr_pct: float,

@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 
 from apex.data.base import candles_from_rows
 
@@ -37,14 +37,14 @@ class CandleStore:
     def close(self) -> None:
         self._conn.close()
 
-    def upsert(self, symbol: str, interval: str, frame: pl.DataFrame, *,
+    def upsert(self, symbol: str, interval: str, frame: pd.DataFrame, *,
                replace: bool = False) -> int:
         """Write candles. With replace=True the symbol's history is swapped atomically."""
         rows = [
             (symbol, interval, int(ts.timestamp() * 1000), o, h, l, c, v)
-            for ts, o, h, l, c, v in frame.select(
-                "ts", "open", "high", "low", "close", "volume"
-            ).iter_rows()
+            for ts, o, h, l, c, v in frame[
+                ["ts", "open", "high", "low", "close", "volume"]
+            ].itertuples(index=False, name=None)
         ]
         with self._conn:  # one transaction: either everything lands or nothing does
             if replace and rows:
@@ -60,7 +60,7 @@ class CandleStore:
             )
         return len(rows)
 
-    def load(self, symbol: str, interval: str, limit: int | None = None) -> pl.DataFrame:
+    def load(self, symbol: str, interval: str, limit: int | None = None) -> pd.DataFrame:
         sql = (
             "SELECT ts, open, high, low, close, volume FROM candles "
             "WHERE symbol = ? AND interval = ? ORDER BY ts DESC"

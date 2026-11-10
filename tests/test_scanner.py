@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import polars as pl
 import pytest
 
 from apex.analysis.indicators import add_indicators
@@ -20,29 +19,28 @@ def test_indicators_have_no_lookahead():
     """Values for a bar must not change when later bars are appended."""
     full = make_candles(320)
     cut = 280
-    a = add_indicators(full).head(cut).select(INDICATORS)
-    b = add_indicators(full.head(cut)).select(INDICATORS)
+    a = add_indicators(full).head(cut)[INDICATORS]
+    b = add_indicators(full.head(cut))[INDICATORS]
     for col in INDICATORS:
-        assert a[col].is_null().to_list() == b[col].is_null().to_list(), col
-        assert a[col].drop_nulls().len() > 0, col
-        assert a[col].drop_nulls().to_list() == pytest.approx(
-            b[col].drop_nulls().to_list(), rel=1e-12), col
+        assert a[col].isna().tolist() == b[col].isna().tolist(), col
+        assert a[col].dropna().size > 0, col
+        assert a[col].dropna().tolist() == pytest.approx(
+            b[col].dropna().tolist(), rel=1e-12), col
 
 
 def test_rsi_extremes_and_bounds():
     rising = make_candles(100, drift=0.01, vol=0.0)
     falling = make_candles(100, drift=-0.01, vol=0.0)
-    assert add_indicators(rising)["rsi14"][-1] == pytest.approx(100.0)
-    assert add_indicators(falling)["rsi14"][-1] == pytest.approx(0.0)
-    noisy = add_indicators(make_candles(300))["rsi14"].drop_nulls()
+    assert add_indicators(rising)["rsi14"].iloc[-1] == pytest.approx(100.0)
+    assert add_indicators(falling)["rsi14"].iloc[-1] == pytest.approx(0.0)
+    noisy = add_indicators(make_candles(300))["rsi14"].dropna()
     assert noisy.min() >= 0 and noisy.max() <= 100
 
 
 def test_atr_of_constant_range_bars():
     n = 60
-    frame = make_candles(n).with_columns(
-        open=pl.lit(100.0), close=pl.lit(100.0), high=pl.lit(102.0), low=pl.lit(98.0))
-    assert add_indicators(frame)["atr14"][-1] == pytest.approx(4.0)
+    frame = make_candles(n).assign(open=100.0, close=100.0, high=102.0, low=98.0)
+    assert add_indicators(frame)["atr14"].iloc[-1] == pytest.approx(4.0)
 
 
 def test_breakout_in_uptrend_becomes_a_candidate(uptrend):
@@ -51,10 +49,10 @@ def test_breakout_in_uptrend_becomes_a_candidate(uptrend):
     p = row.proposal
     assert len(row.passed) >= 4 and "trend" in row.passed
     assert p.side is Side.LONG and p.stop < p.entry < p.targets[0] < p.targets[1]
-    atr = add_indicators(uptrend)["atr14"][-1]
+    atr = add_indicators(uptrend)["atr14"].iloc[-1]
     assert p.entry - p.stop == pytest.approx(2 * atr)
     assert p.targets[0] - p.entry == pytest.approx(2 * (p.entry - p.stop))
-    assert p.as_of == uptrend["ts"][-1]
+    assert p.as_of == uptrend["ts"].iloc[-1]
 
 
 def test_no_trade_cases(uptrend):

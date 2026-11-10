@@ -13,7 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-import polars as pl
+import pandas as pd
+
+from apex.frame import records
 
 from apex.analysis.indicators import prepare
 from apex.analysis.regime import UNKNOWN, Regime, regime_at
@@ -97,9 +99,9 @@ class _Open:
 
 
 class _Series:
-    def __init__(self, symbol: str, asset_class: AssetClass, candles: pl.DataFrame) -> None:
+    def __init__(self, symbol: str, asset_class: AssetClass, candles: pd.DataFrame) -> None:
         self.symbol, self.asset_class = symbol, asset_class
-        self.rows = prepare(candles).to_dicts() if candles.height else []
+        self.rows = records(prepare(candles)) if len(candles) else []
         self.index = {r["ts"].date(): i for i, r in enumerate(self.rows)}
         closes = [r["close"] for r in self.rows]
         self.returns = [0.0] + [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
@@ -107,7 +109,7 @@ class _Series:
 
 def run_backtest(
     groups: list[UniverseGroup],
-    candles: dict[str, pl.DataFrame],
+    candles: dict[str, pd.DataFrame],
     config: BacktestConfig | None = None,
     *,
     limits: RiskLimits | None = None,
@@ -117,7 +119,7 @@ def run_backtest(
     costs = costs or CostModel()
     engine = RiskEngine(limits, costs)
     signal_fn = STRATEGIES[cfg.strategy]
-    empty = pl.DataFrame()
+    empty = pd.DataFrame()
 
     series: dict[str, _Series] = {}
     bench_of: dict[str, _Series] = {}

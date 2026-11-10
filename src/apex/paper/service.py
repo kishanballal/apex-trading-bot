@@ -17,10 +17,16 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
+
+from apex.frame import records
+
+# Predictions this far before the start are stored only so the dashboard is not empty on day 1.
+# The replay starts at cfg.start, so they can never trigger a trade.
+DISPLAY_LOOKBACK = timedelta(days=10)
 
 from apex.backtest.engine import BacktestConfig, BacktestResult, run_backtest
 from apex.backtest.metrics import compute_metrics
@@ -123,7 +129,7 @@ class PaperTrader:
 
     # --- setup ---------------------------------------------------------------------------
 
-    def load_candles(self) -> dict[str, pl.DataFrame]:
+    def load_candles(self) -> dict[str, pd.DataFrame]:
         candles = CandleStore(self.settings.db_path)
         try:
             return {s: candles.load(s, "1d") for g in self.groups for s in (g.benchmark, *g.symbols)}
@@ -147,24 +153,26 @@ class PaperTrader:
 
     # --- daily cycle ---------------------------------------------------------------------
 
-    def record_predictions(self, candles: dict[str, pl.DataFrame], cfg: PaperConfig) -> int:
+    def record_predictions(self, candles: dict[str, pd.DataFrame], cfg: PaperConfig) -> int:
         bundle = ModelBundle.load(self.model_path)
-        data = build_dataset(self.groups, candles).filter(pl.col("date") >= cfg.start)
-        if data.is_empty():
+        data = build_dataset(self.groups, candles)
+        if data.empty or (data := data[data["date"] >= cfg.start - DISPLAY_LOOKBACK].reset_index(drop=True)).empty:
             return 0
         p = bundle.win_probability(data)
         fwd = bundle.forecast_returns(data)
         closes = {(s, r["ts"].date()): r["close"] for s, f in candles.items()
-                  for r in f.select("ts", "close").iter_rows(named=True)}
+                  for r in records(f[["ts", "close"]])}
         now = datetime.now(UTC).isoformat()
         rows = []
-        for i, (symbol, day, atr_pct) in enumerate(data.select("symbol", "date", "atr_pct").iter_rows()):
+        for i, (symbol, day, atr_pct) in enumerate(
+                data[["symbol", "date", "atr_pct"]].itertuples(index=False, name=None)):
             close = closes[(symbol, day)]
+            atr_pct = None if pd.isna(atr_pct) else float(atr_pct)
             path = forecast_path(close, {h: float(v[i]) for h, v in fwd.items()}, atr_pct)
             rows.append((symbol, day.isoformat(), float(p[i]), json.dumps(path), close, atr_pct, now))
         return self.store.add_predictions(rows)
 
-    def replay(self, candles: dict[str, pl.DataFrame], cfg: PaperConfig) -> BacktestResult:
+    def replay(self, candles: dict[str, pd.DataFrame], cfg: PaperConfig) -> BacktestResult:
         table = self.store.predictions()
         scanner.STRATEGIES["_paper"] = make_table_strategy(STRATEGY_NAME, table, cfg.threshold)
         try:
@@ -176,7 +184,7 @@ class PaperTrader:
         finally:
             scanner.STRATEGIES.pop("_paper", None)
 
-    def cycle(self, candles: dict[str, pl.DataFrame] | None = None) -> BacktestResult:
+    def cycle(self, candles: dict[str, pd.DataFrame] | None = None) -> BacktestResult:
         cfg = self.store.config()
         if cfg is None:
             raise RuntimeError("paper trading is not set up yet; run `apex paper init` first")

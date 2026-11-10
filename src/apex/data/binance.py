@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import httpx
-import polars as pl
+import pandas as pd
 
 from apex.data.base import INTERVALS, DataError, candles_from_rows, get_json
 
@@ -28,7 +28,7 @@ class BinanceProvider:
 
     async def fetch_candles(
         self, symbol: str, interval: str, start: datetime, end: datetime
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         if interval not in INTERVALS:
             raise DataError(f"binance: unsupported interval {interval}")
         step_ms = int(INTERVALS[interval].total_seconds() * 1000)

@@ -13,7 +13,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-import polars as pl
+import pandas as pd
+
+from apex.frame import records
 
 from apex.analysis.indicators import prepare
 from apex.analysis.regime import Regime
@@ -229,7 +231,7 @@ STRATEGIES: dict[str, BarStrategy] = {"trend": scan_bar, "pullback": scan_bar_pu
 def scan_symbol(
     symbol: str,
     asset_class: AssetClass,
-    candles: pl.DataFrame,
+    candles: pd.DataFrame,
     regime: Regime,
     *,
     config: ScannerConfig | None = None,
@@ -238,7 +240,7 @@ def scan_symbol(
     strategy: str = "trend",
 ) -> ScanRow:
     """Live entry point: evaluate the most recent finished bar."""
-    rows = prepare(candles).to_dicts() if candles.height else []
+    rows = records(prepare(candles)) if len(candles) else []
     return STRATEGIES[strategy](symbol, asset_class, rows, len(rows) - 1, regime,
                                 config=config, now=now, fx_to_base=fx_to_base)
 

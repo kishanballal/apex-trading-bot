@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 
-import polars as pl
+import numpy as np
+import pandas as pd
+
+from apex.frame import records
 import pytest
 
 from apex.analysis.indicators import prepare, rolling_percentile_rank
@@ -23,7 +26,7 @@ START = datetime(2025, 1, 1, 3, 45, tzinfo=UTC)
 SIDE = 0.002  # equity cost per side
 
 
-def bars(spec: list[tuple[float, float, float, float]], start: datetime = START) -> pl.DataFrame:
+def bars(spec: list[tuple[float, float, float, float]], start: datetime = START) -> pd.DataFrame:
     """spec rows are (open, high, low, close), one per consecutive day."""
     return candles_from_rows([
         (int((start + timedelta(days=i)).timestamp() * 1000), o, h, l, c, 1e7)
@@ -60,7 +63,7 @@ def run(spec, fire, fake_strategy, **cfg):
 def test_live_scan_and_backtest_see_identical_signals():
     """The per-bar strategy on full history must equal the live scan on truncated history."""
     candles = make_candles(330, breakout=True)
-    rows = prepare(candles).to_dicts()
+    rows = records(prepare(candles))
     for strategy, fn in (("trend", scan_bar), ("pullback", scan_bar_pullback)):
         candidates = 0
         for i in range(225, 330):
@@ -77,16 +80,17 @@ def test_rolling_rank_matches_the_naive_definition():
     series = prepare(make_candles(330))["atr_pct"]
     rolled = rolling_percentile_rank(series)
     for i in (10, 59, 80, 200, 329):
-        window = series.head(i + 1).drop_nulls().tail(252)
-        expected = (None if window.len() < 60
-                    else float((window < window[-1]).sum()) / (window.len() - 1))
-        assert rolled[i] == (pytest.approx(expected) if expected is not None else None)
+        window = series.head(i + 1).dropna().tail(252).to_numpy()
+        expected = (None if len(window) < 60
+                    else float((window < window[-1]).sum()) / (len(window) - 1))
+        value = None if np.isnan(rolled[i]) else rolled[i]
+        assert value == (pytest.approx(expected) if expected is not None else None)
 
 
 def test_regime_at_uses_only_past_bars():
     bench = make_candles(330, drift=0.002, vol=0.005)
-    rows = prepare(bench).to_dicts()
-    assert regime_at(rows, 250) == regime_at(prepare(bench.head(251)).to_dicts(), 250)
+    rows = records(prepare(bench))
+    assert regime_at(rows, 250) == regime_at(records(prepare(bench.head(251))), 250)
     assert regime_at(rows, 100).trend is Trend.UNKNOWN
 
 

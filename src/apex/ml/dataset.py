@@ -8,14 +8,14 @@ training can exclude samples whose outcome was not yet visible at the time (purg
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
-import polars as pl
+import pandas as pd
 
 from apex.analysis.indicators import prepare
 from apex.config import CostModel, UniverseGroup
+from apex.frame import dates, matrix, records
 from apex.models import AssetClass
 from apex.scanner.scanner import ScannerConfig
 
@@ -37,26 +37,25 @@ class LabelConfig:
     horizon: int = HORIZON
 
 
-def _feature_frame(candles: pl.DataFrame) -> pl.DataFrame:
+def _feature_frame(candles: pd.DataFrame) -> pd.DataFrame:
     f = prepare(candles)
-    c = pl.col("close")
-    return f.with_columns(
-        *[(c / c.shift(n) - 1).alias(f"ret_{n}") for n in (1, 5, 10, 20, 60, 120, 250)],
-        (c / pl.col("ema20") - 1).alias("dist_ema20"),
-        (c / pl.col("ema50") - 1).alias("dist_ema50"),
-        (c / pl.col("ema200") - 1).alias("dist_ema200"),
-        (pl.col("ema50") / pl.col("ema200") - 1).alias("ema50_vs_200"),
-        (pl.col("ema200") / pl.col("ema200_prev") - 1).alias("ema200_slope"),
-        (pl.col("macd_hist") / c).alias("macd_rel"),
-        (pl.col("turnover20").log()).alias("log_turnover"),
-        (c / pl.col("prior_high20") - 1).alias("dist_high20"),
-        (c / pl.col("high").rolling_max(250) - 1).alias("dist_high250"),
-        (c / c.shift(1) - 1).rolling_std(20).alias("realized_vol20"),
-        (c > pl.col("open")).cast(pl.Float64).alias("up_day"),
-        pl.when(pl.col("high") > pl.col("low"))
-        .then((c - pl.col("low")) / (pl.col("high") - pl.col("low"))).otherwise(0.5)
-        .alias("range_pos"),
-    )
+    c = f["close"]
+    for n in (1, 5, 10, 20, 60, 120, 250):
+        f[f"ret_{n}"] = c / c.shift(n) - 1
+    f["dist_ema20"] = c / f["ema20"] - 1
+    f["dist_ema50"] = c / f["ema50"] - 1
+    f["dist_ema200"] = c / f["ema200"] - 1
+    f["ema50_vs_200"] = f["ema50"] / f["ema200"] - 1
+    f["ema200_slope"] = f["ema200"] / f["ema200_prev"] - 1
+    f["macd_rel"] = f["macd_hist"] / c
+    f["log_turnover"] = np.log(f["turnover20"])
+    f["dist_high20"] = c / f["prior_high20"] - 1
+    f["dist_high250"] = c / f["high"].rolling(250).max() - 1
+    f["realized_vol20"] = (c / c.shift(1) - 1).rolling(20).std()
+    f["up_day"] = (c > f["open"]).astype("float64")
+    span = f["high"] - f["low"]
+    f["range_pos"] = ((c - f["low"]) / span.where(span > 0)).where(span > 0, 0.5)
+    return f
 
 
 def label_outcome(rows: list[dict], i: int, cfg: LabelConfig, side_cost: float):
@@ -94,63 +93,61 @@ def label_outcome(rows: list[dict], i: int, cfg: LabelConfig, side_cost: float):
 
 def build_dataset(
     groups: list[UniverseGroup],
-    candles: dict[str, pl.DataFrame],
+    candles: dict[str, pd.DataFrame],
     *,
     label: LabelConfig | None = None,
     scanner: ScannerConfig | None = None,
     costs: CostModel | None = None,
-) -> pl.DataFrame:
+) -> pd.DataFrame:
     label, scanner, costs = label or LabelConfig(), scanner or ScannerConfig(), costs or CostModel()
-    parts: list[pl.DataFrame] = []
+    parts: list[pd.DataFrame] = []
     for group in groups:
         bench = candles.get(group.benchmark)
-        if bench is None or bench.is_empty():
+        if bench is None or bench.empty:
             continue
         b = prepare(bench)
-        bc = pl.col("close")
-        bench_feats = b.select(
-            pl.col("ts").dt.date().alias("date"),
-            (bc / bc.shift(20) - 1).alias("bench_ret_20"),
-            (bc / bc.shift(60) - 1).alias("bench_ret_60"),
-            (bc / pl.col("ema200") - 1).alias("bench_dist_ema200"),
-            pl.col("vol_rank").alias("bench_vol_rank"),
-        )
+        bc = b["close"]
+        bench_feats = pd.DataFrame({
+            "date": dates(b["ts"]),
+            "bench_ret_20": bc / bc.shift(20) - 1,
+            "bench_ret_60": bc / bc.shift(60) - 1,
+            "bench_dist_ema200": bc / b["ema200"] - 1,
+            "bench_vol_rank": b["vol_rank"],
+        }).drop_duplicates("date", keep="last")
         side_cost = costs.per_side(group.asset_class)
         for symbol in group.symbols:
             raw = candles.get(symbol)
-            if raw is None or raw.height < scanner.min_bars + label.horizon:
+            if raw is None or len(raw) < scanner.min_bars + label.horizon:
                 continue
             frame = _feature_frame(raw)
-            rows = frame.to_dicts()
+            rows = records(frame[["ts", "open", "high", "low", "close", "atr14"]])
             wins, rs, ends = [], [], []
             for i in range(len(rows)):
                 out = label_outcome(rows, i, label, side_cost) if i + 1 >= scanner.min_bars else None
                 wins.append(None if out is None else float(out[0]))
                 rs.append(None if out is None else out[1])
                 ends.append(None if out is None else rows[out[2]]["ts"])
-            frame = frame.with_columns(
-                pl.Series("y", wins, dtype=pl.Float64),
-                pl.Series("r", rs, dtype=pl.Float64),
-                pl.Series("label_end", ends, dtype=frame.schema["ts"]),
-                pl.lit(symbol).alias("symbol"),
-                pl.lit(group.asset_class.value).alias("asset_class"),
-                pl.lit(1.0 if group.asset_class is AssetClass.CRYPTO else 0.0).alias("is_crypto"),
-                pl.col("ts").dt.date().alias("date"),
-            ).join(bench_feats, on="date", how="left").with_columns(
-                (pl.col("ret_60") - pl.col("bench_ret_60")).alias("rel_strength_60"),
-            ).filter(pl.col("turnover20") >= scanner.min_turnover[group.asset_class])
+            frame["y"] = pd.Series(wins, index=frame.index, dtype="float64")
+            frame["r"] = pd.Series(rs, index=frame.index, dtype="float64")
+            frame["label_end"] = pd.to_datetime(pd.Series(ends, index=frame.index), utc=True)
+            frame["symbol"] = symbol
+            frame["asset_class"] = group.asset_class.value
+            frame["is_crypto"] = 1.0 if group.asset_class is AssetClass.CRYPTO else 0.0
+            frame["date"] = dates(frame["ts"])
+            frame = frame.merge(bench_feats, on="date", how="left")
+            frame["rel_strength_60"] = frame["ret_60"] - frame["bench_ret_60"]
+            frame = frame[frame["turnover20"] >= scanner.min_turnover[group.asset_class]]
             parts.append(frame)
     if not parts:
-        return pl.DataFrame()
-    data = pl.concat(parts, how="vertical_relaxed")
+        return pd.DataFrame()
+    data = pd.concat(parts, ignore_index=True)
     # Cross-sectional ranks use only that day's values across symbols of the same asset class.
-    data = data.with_columns(
-        *[(pl.col(c).rank() / pl.col(c).count()).over("date", "asset_class").alias(f"rank_{c}")
-          for c in ("ret_60", "ret_120")]
-    )
+    grouped = data.groupby(["date", "asset_class"])
+    for c in ("ret_60", "ret_120"):
+        data[f"rank_{c}"] = grouped[c].rank() / grouped[c].transform("count")
     keep = ["symbol", "asset_class", "ts", "date", "label_end", "y", "r", *FEATURES]
-    return data.select(keep).sort("ts", "symbol")
+    return data[keep].sort_values(["ts", "symbol"], kind="stable").reset_index(drop=True)
 
 
-def to_matrix(data: pl.DataFrame) -> np.ndarray:
-    return data.select(FEATURES).fill_null(math.nan).to_numpy().astype(np.float64)
+def to_matrix(data: pd.DataFrame) -> np.ndarray:
+    return matrix(data, FEATURES)

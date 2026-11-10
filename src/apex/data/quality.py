@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-import polars as pl
+import numpy as np
+import pandas as pd
 
-from apex.data.base import CANDLE_SCHEMA
+from apex.data.base import CANDLE_COLUMNS
 
 JUMP_WARNING = 0.40  # a one-bar move this large is usually a bad tick or an unadjusted split
 _EPS = 1e-9
@@ -28,35 +29,37 @@ class QualityReport:
 
 
 def clean_candles(
-    frame: pl.DataFrame, *, now: datetime, bar_duration: timedelta
-) -> tuple[pl.DataFrame, QualityReport]:
+    frame: pd.DataFrame, *, now: datetime, bar_duration: timedelta
+) -> tuple[pd.DataFrame, QualityReport]:
     """Return sorted, de-duplicated, finished, internally consistent candles."""
-    rows_in = frame.height
-    frame = frame.select([pl.col(c).cast(t) for c, t in CANDLE_SCHEMA.items()])
+    rows_in = len(frame)
+    frame = frame[CANDLE_COLUMNS].copy()
+    for c in CANDLE_COLUMNS[1:]:
+        frame[c] = pd.to_numeric(frame[c], errors="coerce").astype("float64")
 
-    valid = frame.drop_nulls().filter(
-        (pl.col("open") > 0)
-        & (pl.col("low") > 0)
-        & (pl.col("close") > 0)
-        & (pl.col("volume") >= 0)
-        & (pl.col("high") * (1 + _EPS) >= pl.max_horizontal("open", "close", "low"))
-        & (pl.col("low") * (1 - _EPS) <= pl.min_horizontal("open", "close"))
-        & pl.all_horizontal(pl.col("open", "high", "low", "close", "volume").is_finite())
+    num = frame[CANDLE_COLUMNS[1:]]
+    ok = (
+        frame["ts"].notna()
+        & np.isfinite(num.to_numpy(dtype=float, na_value=np.nan)).all(axis=1)
+        & (frame["open"] > 0) & (frame["low"] > 0) & (frame["close"] > 0)
+        & (frame["volume"] >= 0)
+        & (frame["high"] * (1 + _EPS) >= frame[["open", "close", "low"]].max(axis=1))
+        & (frame["low"] * (1 - _EPS) <= frame[["open", "close"]].min(axis=1))
     )
-    dropped_invalid = rows_in - valid.height
+    valid = frame[ok]
+    dropped_invalid = rows_in - len(valid)
 
-    unique = valid.unique(subset="ts", keep="last").sort("ts")
-    dropped_duplicates = valid.height - unique.height
+    unique = valid.drop_duplicates(subset="ts", keep="last").sort_values("ts")
+    dropped_duplicates = len(valid) - len(unique)
 
     # Look-ahead guard: a bar still forming must never be used for a decision.
-    finished = unique.filter(pl.col("ts") + bar_duration <= now)
-    dropped_unfinished = unique.height - finished.height
+    finished = unique[unique["ts"] + bar_duration <= pd.Timestamp(now)].reset_index(drop=True)
+    dropped_unfinished = len(unique) - len(finished)
 
-    jumps = finished.select(
-        ((pl.col("close") / pl.col("close").shift(1) - 1).abs() > JUMP_WARNING).sum()
-    ).item() if finished.height > 1 else 0
+    jumps = int(((finished["close"] / finished["close"].shift(1) - 1).abs() > JUMP_WARNING).sum()) \
+        if len(finished) > 1 else 0
 
     return finished, QualityReport(
-        rows_in, finished.height, dropped_invalid, dropped_duplicates, dropped_unfinished,
+        rows_in, len(finished), dropped_invalid, dropped_duplicates, dropped_unfinished,
         int(jumps or 0),
     )

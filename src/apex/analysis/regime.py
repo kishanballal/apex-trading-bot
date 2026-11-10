@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-import polars as pl
+import pandas as pd
+
+from apex.frame import records
 
 from apex.analysis.indicators import prepare
 
@@ -55,6 +57,6 @@ def regime_at(rows: list[dict], i: int) -> Regime:
     return Regime(trend, rank is not None and rank >= HIGH_VOL_RANK, detail)
 
 
-def detect_regime(benchmark: pl.DataFrame) -> Regime:
-    rows = prepare(benchmark).to_dicts() if benchmark.height else []
+def detect_regime(benchmark: pd.DataFrame) -> Regime:
+    rows = records(prepare(benchmark)) if len(benchmark) else []
     return regime_at(rows, len(rows) - 1)

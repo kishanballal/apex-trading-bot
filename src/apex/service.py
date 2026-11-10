@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 
 from apex.analysis.regime import Regime, detect_regime
 from apex.config import CostModel, RiskLimits, Settings, UniverseGroup
@@ -43,8 +43,8 @@ def build_engine(settings: Settings) -> RiskEngine:
                       live_authorized=settings.live_authorized, timezone=settings.timezone)
 
 
-def _returns(candles: pl.DataFrame) -> list[float]:
-    return candles["close"].pct_change().drop_nulls().tail(RETURN_WINDOW).to_list()
+def _returns(candles: pd.DataFrame) -> list[float]:
+    return candles["close"].pct_change().dropna().tail(RETURN_WINDOW).tolist()
 
 
 def run_scan(

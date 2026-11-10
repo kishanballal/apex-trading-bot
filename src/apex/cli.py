@@ -247,11 +247,11 @@ def research(
     candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
     store.close()
     data = build_dataset(groups, candles)
-    if data.is_empty():
+    if data.empty:
         console.print("[red]No data. Run `apex fetch --days 3300` first.[/red]")
         raise typer.Exit(1)
     last_year = data["date"].max().year
-    console.print(f"{data.height:,} samples. Training and testing year by year, please wait.")
+    console.print(f"{len(data):,} samples. Training and testing year by year, please wait.")
     predictions, scores = walk_forward(data, list(range(first_test_year, last_year + 1)))
 
     folds = Table(title="Prediction quality on unseen years (AUC 0.50 is a coin flip)")
@@ -280,7 +280,7 @@ def research(
     run("trend (no ML)", "trend")
     run("pullback (no ML)", "pullback")
     for model in [c for c in predictions.columns if c not in ("symbol", "date", "ts", "y", "r")]:
-        table = {(a, b): c for a, b, c in predictions.select("symbol", "date", model).iter_rows()}
+        table = {(a, b): c for a, b, c in predictions[["symbol", "date", model]].itertuples(index=False, name=None)}
         STRATEGIES["_ml"] = make_table_strategy(f"ml_{model}", table, threshold)
         run(f"{model} p >= {threshold:.2f}", "_ml")
     STRATEGIES.pop("_ml", None)

@@ -64,7 +64,7 @@ async def update_symbol(
         frame, report = clean_candles(
             raw, now=now, bar_duration=provider.bar_duration(interval)
         )
-        if frame.is_empty():
+        if frame.empty:
             raise DataError(f"{symbol}: no finished candles returned")
         rows = store.upsert(symbol, interval, frame, replace=provider.full_refresh)
         return FetchResult(symbol, True, rows, quality=report)

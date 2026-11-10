@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from apex.frame import records
+
 from apex.config import UniverseGroup, load_universe, Settings
 from apex.data.base import DataError, candles_from_rows, get_json
 from apex.data.binance import BinanceProvider
@@ -38,8 +40,8 @@ def test_yahoo_symbol_mapping():
 def test_yahoo_parse_skips_null_bars_and_applies_adjustment():
     frame = parse_chart(yahoo_payload([86400, 172800, 259200], [100.0, None, 200.0],
                                       adj=[50.0, None, 200.0]), "X")
-    assert frame.height == 2
-    first = frame.row(0, named=True)
+    assert len(frame) == 2
+    first = records(frame)[0]
     assert first["close"] == pytest.approx(50.0)
     assert first["high"] == pytest.approx(50.5)  # whole bar scaled, not only the close
     assert first["ts"] == datetime(1970, 1, 2, tzinfo=UTC)
@@ -63,7 +65,7 @@ async def test_yahoo_provider_encodes_symbol():
         frame = await YahooProvider(client, "https://y.test").fetch_candles(
             "M&M", "1d", NOW - timedelta(days=5), NOW)
     assert "M%26M.NS" in seen["path"]
-    assert frame.height == 1
+    assert len(frame) == 1
 
 
 async def test_get_json_retries_then_succeeds_and_fails_fast_on_404():
@@ -104,9 +106,9 @@ async def test_binance_paginates(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         frame = await BinanceProvider(client, "https://b.test").fetch_candles(
             "BTCUSDT", "1d", start, start + timedelta(days=30))
-    assert frame.height == 5
+    assert len(frame) == 5
     assert len(requests) == 3
-    assert frame["close"].to_list() == [1.5] * 5
+    assert frame["close"].tolist() == [1.5] * 5
 
 
 def test_quality_drops_bad_duplicate_and_unfinished_rows():
@@ -119,7 +121,7 @@ def test_quality_drops_bad_duplicate_and_unfinished_rows():
         (int((NOW - timedelta(hours=2)).timestamp() * 1000), 10, 11, 9, 10, 100),  # still forming
     ]
     frame, report = clean_candles(candles_from_rows(rows), now=NOW, bar_duration=timedelta(days=1))
-    assert frame.height == 1
+    assert len(frame) == 1
     assert frame["close"][0] == 10.6
     assert (report.dropped_invalid, report.dropped_duplicates, report.dropped_unfinished) == (2, 1, 1)
 
@@ -136,11 +138,11 @@ def test_store_upsert_is_idempotent_and_replace_swaps_history(tmp_path):
     candles = make_candles(30)
     store.upsert("A", "1d", candles)
     store.upsert("A", "1d", candles)
-    assert store.load("A", "1d").height == 30
-    assert store.load("A", "1d", limit=5)["ts"].to_list() == candles["ts"].tail(5).to_list()
+    assert len(store.load("A", "1d")) == 30
+    assert store.load("A", "1d", limit=5)["ts"].tolist() == candles["ts"].tail(5).tolist()
     store.upsert("A", "1d", candles.tail(10), replace=True)
-    assert store.load("A", "1d").height == 10
-    assert store.load("B", "1d").is_empty()
+    assert len(store.load("A", "1d")) == 10
+    assert store.load("B", "1d").empty
     assert store.symbols("1d") == ["A"]
 
 
@@ -170,7 +172,7 @@ async def test_pipeline_survives_a_failing_symbol(tmp_path):
     by_symbol = {r.symbol: r for r in results}
     assert by_symbol["GOOD"].ok and by_symbol["BENCH"].ok and not by_symbol["BAD"].ok
     assert "boom" in by_symbol["BAD"].error
-    assert store.load("BAD", "1d").is_empty()
+    assert store.load("BAD", "1d").empty
 
 
 async def test_pipeline_resumes_incrementally(tmp_path):
@@ -181,7 +183,7 @@ async def test_pipeline_resumes_incrementally(tmp_path):
     first, second = provider.starts["A"]
     assert first == NOW - timedelta(days=730)
     assert second == NOW - timedelta(days=1) - timedelta(days=3)  # last bar minus overlap
-    assert store.load("A", "1d").height == 50
+    assert len(store.load("A", "1d")) == 50
 
 
 def test_universe_file_loads():

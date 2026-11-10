@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
-import polars as pl
 import pytest
 
 pytest.importorskip("sklearn")
 
+from apex.frame import dates
 from apex.ml.dataset import build_dataset
 from apex.ml.sequence import SEQ_FEATURES, WINDOW, GRUClassifier, build_sequences
 from test_ml import GROUPS, universe
@@ -16,13 +16,13 @@ from test_ml import GROUPS, universe
 def test_sequences_align_with_rows_and_ignore_the_future():
     full = universe()
     cut = date(2025, 3, 31)
-    truncated = {k: v.filter(pl.col("ts").dt.date() <= cut) for k, v in full.items()}
+    truncated = {k: v[dates(v["ts"]) <= cut].reset_index(drop=True) for k, v in full.items()}
     data_full, data_cut = build_dataset(GROUPS, full), build_dataset(GROUPS, truncated)
     seq_full = build_sequences(GROUPS, full, data_full)
     seq_cut = build_sequences(GROUPS, truncated, data_cut)
-    assert seq_full.shape == (data_full.height, WINDOW, len(SEQ_FEATURES))
+    assert seq_full.shape == (len(data_full), WINDOW, len(SEQ_FEATURES))
     keep = (data_full["date"] <= cut).to_numpy()
-    assert keep.sum() == data_cut.height > 1000
+    assert keep.sum() == len(data_cut) > 1000
     np.testing.assert_array_equal(seq_full[keep], seq_cut)
     # The last step of each window is the row's own bar: its return matches ret_1.
     full_window = ~np.isnan(seq_full[:, -1, 0])

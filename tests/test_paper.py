@@ -15,7 +15,7 @@ from apex.config import Settings
 from apex.data.store import CandleStore
 from apex.ml.live import HORIZONS, forecast_path
 from apex.models import AssetClass
-from apex.paper.service import PaperConfig, PaperTrader
+from apex.paper.service import DISPLAY_LOOKBACK, PaperConfig, PaperTrader
 from test_ml import END, GROUPS, universe
 
 START = date(2025, 9, 1)
@@ -45,7 +45,8 @@ def test_floor_sets_the_kill_switch_and_is_validated(trader):
 def test_cycle_is_idempotent_and_never_rewrites_a_prediction(trader):
     first = trader.snapshot(trader.cycle())
     table = trader.store.predictions()
-    assert table and min(d for _, d in table) >= START  # nothing recorded before the start
+    # Only a short display window before the start is recorded; the replay never trades on it.
+    assert table and min(d for _, d in table) >= START - DISPLAY_LOOKBACK
     assert max(d for _, d in table) == END.date()
     second = trader.snapshot(trader.cycle())
     assert trader.store.get("last_cycle")["new_predictions"] == 0

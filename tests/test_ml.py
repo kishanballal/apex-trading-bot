@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
-import polars as pl
 import pytest
 
 pytest.importorskip("sklearn")
@@ -11,6 +10,7 @@ pytest.importorskip("sklearn")
 from apex.analysis.regime import Regime, Trend
 from apex.backtest.engine import BacktestConfig, run_backtest
 from apex.config import RISK_PROFILES, UniverseGroup, risk_profile
+from apex.frame import dates, records
 from apex.ml.dataset import FEATURES, LabelConfig, build_dataset, label_outcome, to_matrix
 from apex.ml.strategy import make_table_strategy
 from apex.ml.walkforward import walk_forward
@@ -62,20 +62,21 @@ def test_label_is_none_when_outcome_unknown_or_untradable():
 def test_features_do_not_change_when_the_future_is_removed():
     full = universe()
     cut = date(2025, 3, 31)
-    truncated = {k: v.filter(pl.col("ts").dt.date() <= cut) for k, v in full.items()}
-    a = build_dataset(GROUPS, full).filter(pl.col("date") <= cut).select("symbol", "date", *FEATURES)
-    b = build_dataset(GROUPS, truncated).select("symbol", "date", *FEATURES)
-    assert a.height == b.height > 1000
+    truncated = {k: v[dates(v["ts"]) <= cut].reset_index(drop=True) for k, v in full.items()}
+    a = build_dataset(GROUPS, full)
+    a = a[a["date"] <= cut][["symbol", "date", *FEATURES]].reset_index(drop=True)
+    b = build_dataset(GROUPS, truncated)[["symbol", "date", *FEATURES]]
+    assert len(a) == len(b) > 1000
     assert a.equals(b)
 
 
 def test_labels_resolve_strictly_after_the_signal_and_recent_bars_are_unlabelled():
     data = build_dataset(GROUPS, universe())
-    labelled = data.filter(pl.col("y").is_not_null())
+    labelled = data[data["y"].notna()]
     assert (labelled["label_end"] > labelled["ts"]).all()
-    assert set(labelled["y"].unique().to_list()) == {0.0, 1.0}
+    assert set(labelled["y"].unique().tolist()) == {0.0, 1.0}
     last_day = data["date"].max()
-    assert data.filter(pl.col("date") == last_day)["y"].null_count() == 3
+    assert data[data["date"] == last_day]["y"].isna().sum() == 3
     assert not np.isinf(to_matrix(data)).any()
 
 
@@ -94,19 +95,19 @@ def test_walk_forward_never_trains_on_the_test_period(monkeypatch):
 
     year = 2025
     cutoff = datetime(year, 1, 1, tzinfo=UTC)
-    eligible = data.filter(pl.col("y").is_not_null() & (pl.col("label_end") < cutoff))
+    eligible = data[data["y"].notna() & (data["label_end"] < cutoff)]
     predictions, scores = walk_forward(data, [year], models={"spy": Spy})
-    assert seen["n"][0] < eligible.height * 0.8 + 1  # calibration slice and purge are held out
+    assert seen["n"][0] < len(eligible) * 0.8 + 1  # calibration slice and purge are held out
     assert predictions["date"].min() >= date(year, 1, 1)
-    assert predictions.height == data.filter(pl.col("date") >= date(year, 1, 1)).height
-    assert predictions["spy"].is_between(0, 1).all()
+    assert len(predictions) == len(data[data["date"] >= date(year, 1, 1)])
+    assert predictions["spy"].between(0, 1).all()
     assert scores and scores[0].year == year and scores[0].n_train == seen["n"][0]
 
 
 def test_table_strategy_trades_only_above_threshold_and_respects_regime():
     candles = make_candles(330, breakout=True)
     from apex.analysis.indicators import prepare
-    rows = prepare(candles).to_dicts()
+    rows = records(prepare(candles))
     day = rows[-1]["ts"].date()
     now = rows[-1]["ts"] + timedelta(hours=8)
     bull, bear = Regime(Trend.BULL, False, ""), Regime(Trend.BEAR, False, "")

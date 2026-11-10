@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 import httpx
-import polars as pl
+import pandas as pd
 
 INTERVALS: dict[str, timedelta] = {
     "1m": timedelta(minutes=1),
@@ -17,38 +17,28 @@ INTERVALS: dict[str, timedelta] = {
     "1d": timedelta(days=1),
 }
 
-CANDLE_SCHEMA = {
-    "ts": pl.Datetime("ms", "UTC"),
-    "open": pl.Float64,
-    "high": pl.Float64,
-    "low": pl.Float64,
-    "close": pl.Float64,
-    "volume": pl.Float64,
-}
+CANDLE_COLUMNS = ["ts", "open", "high", "low", "close", "volume"]
 
 
 class DataError(RuntimeError):
     """A provider could not return usable data. Callers skip the symbol; they never invent data."""
 
 
-def empty_candles() -> pl.DataFrame:
-    return pl.DataFrame(schema=CANDLE_SCHEMA)
+def empty_candles() -> pd.DataFrame:
+    frame = pd.DataFrame({c: pd.Series(dtype="float64") for c in CANDLE_COLUMNS})
+    frame["ts"] = pd.to_datetime(frame["ts"], unit="ms", utc=True)
+    return frame
 
 
-def candles_from_rows(rows: list[tuple]) -> pl.DataFrame:
+def candles_from_rows(rows: list[tuple]) -> pd.DataFrame:
     """rows: (epoch_ms, open, high, low, close, volume)."""
     if not rows:
         return empty_candles()
-    frame = pl.DataFrame(
-        rows,
-        schema=["ts", "open", "high", "low", "close", "volume"],
-        orient="row",
-        infer_schema_length=None,
-    )
-    return frame.with_columns(
-        pl.col("ts").cast(pl.Int64).cast(pl.Datetime("ms")).dt.replace_time_zone("UTC"),
-        *[pl.col(c).cast(pl.Float64) for c in ("open", "high", "low", "close", "volume")],
-    )
+    frame = pd.DataFrame(rows, columns=CANDLE_COLUMNS)
+    for c in CANDLE_COLUMNS[1:]:
+        frame[c] = pd.to_numeric(frame[c], errors="coerce").astype("float64")
+    frame["ts"] = pd.to_datetime(frame["ts"].astype("int64"), unit="ms", utc=True)
+    return frame
 
 
 class MarketDataProvider(Protocol):
@@ -62,7 +52,7 @@ class MarketDataProvider(Protocol):
 
     async def fetch_candles(
         self, symbol: str, interval: str, start: datetime, end: datetime
-    ) -> pl.DataFrame: ...
+    ) -> pd.DataFrame: ...
 
 
 async def get_json(

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote
 
 import httpx
-import polars as pl
+import pandas as pd
 
 from apex.data.base import INTERVALS, DataError, candles_from_rows, get_json
 
@@ -37,7 +37,7 @@ class YahooProvider:
 
     async def fetch_candles(
         self, symbol: str, interval: str, start: datetime, end: datetime
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         if interval not in _YAHOO_INTERVAL:
             raise DataError(f"yahoo: unsupported interval {interval}")
         url = f"{self._base}/v8/finance/chart/{quote(to_yahoo_symbol(symbol), safe='^.=-')}"
@@ -53,7 +53,7 @@ class YahooProvider:
         return parse_chart(payload, symbol)
 
 
-def parse_chart(payload: dict, symbol: str) -> pl.DataFrame:
+def parse_chart(payload: dict, symbol: str) -> pd.DataFrame:
     chart = (payload or {}).get("chart") or {}
     if chart.get("error"):
         raise DataError(f"yahoo: {symbol}: {chart['error'].get('description', chart['error'])}")

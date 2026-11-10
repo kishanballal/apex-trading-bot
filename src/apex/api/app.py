@@ -16,6 +16,7 @@ from apex.analysis.regime import detect_regime
 from apex.config import Settings
 from apex.data.pipeline import build_providers, make_client, update_universe
 from apex.data.store import CandleStore
+from apex.frame import records
 from apex.models import AssetClass
 from apex.paper.service import PaperTrader
 
@@ -100,11 +101,11 @@ class Dashboard:
 
     def chart(self, symbol: str) -> dict:
         frame = self.candles.get(symbol)
-        if frame is None or frame.is_empty():
+        if frame is None or frame.empty:
             raise HTTPException(404, f"no data for {symbol}")
         tail = frame.tail(180)
         candles = [{"time": r["ts"].date().isoformat(), "open": r["open"], "high": r["high"],
-                    "low": r["low"], "close": r["close"]} for r in tail.iter_rows(named=True)]
+                    "low": r["low"], "close": r["close"]} for r in records(tail)]
         asset_class = self.asset_class.get(symbol, AssetClass.EQUITY)
         history = self.trader.store.forecast_history(symbol, 60)
         dates = [c["time"] for c in candles]
@@ -118,7 +119,7 @@ class Dashboard:
         forecast = []
         if history and history[-1]["date"] == dates[-1]:
             latest = history[-1]
-            steps = future_dates(tail["ts"][-1], len(latest["forecast"]), asset_class)
+            steps = future_dates(tail["ts"].iloc[-1], len(latest["forecast"]), asset_class)
             forecast = [{"time": dates[-1], "mid": latest["close"], "low": latest["close"],
                          "high": latest["close"]}]
             forecast += [{"time": t, **{k: f[k] for k in ("mid", "low", "high")}}
