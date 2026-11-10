@@ -3,13 +3,16 @@
 A selective, risk-first trading system. Capital preservation comes first, and
 **NO TRADE is the default answer**. It runs in paper mode. Live trading is locked.
 
-This is stage 1 of 4: the core engine.
+Stages 1 and 2 of 4 are built: the core engine and the backtester.
+Backtest findings are in [docs/backtest-results.md](docs/backtest-results.md). Short version:
+the baseline strategies do not yet have an edge worth trading.
 
 | Part | What it does | Where |
 | --- | --- | --- |
 | Data pipeline | Downloads daily candles for NSE stocks (Yahoo Finance) and crypto (Binance public data), validates them, stores them in a local SQLite file | `src/apex/data/` |
 | Scanner | Scores every symbol on five independent kinds of evidence and proposes a trade only when at least four agree and the market regime is healthy | `src/apex/scanner/`, `src/apex/analysis/` |
 | Risk engine | Sizes every trade and can veto it. Nothing else in the system can set a position size | `src/apex/risk/` |
+| Backtester | Replays history through the same strategy code and the same risk engine, with costs, next-day fills, gaps and a tax estimate | `src/apex/backtest/` |
 
 ## Setup (Windows)
 
@@ -27,11 +30,13 @@ On macOS or Linux use `python3.13 -m venv .venv` and `source .venv/bin/activate`
 ## Use
 
 ```powershell
-pytest              # run the 51 automated tests
+pytest              # run the 69 automated tests
 apex fetch          # download and validate market data (about a minute)
 apex scan           # show trades the risk engine would approve
 apex scan --all     # show every symbol and why it was or was not picked
 apex status         # show limits and whether any kill switch is active
+apex fetch --days 3300                # long history, needed once before backtesting
+apex backtest --strategy trend        # or --strategy pullback
 ```
 
 No API keys or accounts are needed at this stage. `apex scan` places no trades.
@@ -88,20 +93,19 @@ Costs assumed per side: 0.15% fees plus 0.05% slippage for stocks, 0.10% plus
 Copy `.env.example` to `.env` to change capital, the USD to INR rate or the data
 folder. Edit `config/universe.toml` to change the watchlist.
 
-## Known limits of stage 1
+## Known limits
 
 - Yahoo Finance is a free, unofficial source. It is fine for daily candles in
   paper trading and not good enough for live or intraday trading.
-- One strategy only (swing). Intraday, long-term and ML models come later, and
-  each must beat this baseline in backtests to be kept.
-- No backtester yet, so there is **no evidence yet that these rules make money**.
-  That is stage 2.
+- Two swing strategies only (trend continuation and pullback), both long only.
+  Intraday needs better data than the free sources give.
+- **The backtests show no edge worth trading yet.** See the results document.
 - Storage is a local SQLite file. PostgreSQL, Redis and Docker arrive with the
   dashboard stage, when several services need to share data.
 
 ## Roadmap
 
-1. Core engine: data, scanner, risk engine (this stage).
-2. Backtester with costs, taxes and slippage, plus baseline strategies.
+1. Core engine: data, scanner, risk engine. Done.
+2. Backtester with costs, taxes and slippage, plus baseline strategies. Done.
 3. Paper trading loop, Telegram alerts, React dashboard.
 4. ML models (XGBoost, LSTM, Transformer, Kronos), then authorised live trading.

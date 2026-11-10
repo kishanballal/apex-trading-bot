@@ -54,10 +54,16 @@ class PortfolioState:
             raise ValueError(f"{position.symbol} is already open; adding to positions is not allowed")
         self.positions[position.symbol] = position
 
-    def close_position(self, symbol: str, pnl: float, now: datetime) -> None:
-        """Record a closed trade. `pnl` is net of costs, in base currency."""
+    def close_position(
+        self, symbol: str, pnl: float, now: datetime, *, equity: float | None = None
+    ) -> None:
+        """Record a closed trade. `pnl` is net of costs, in base currency.
+
+        Pass `equity` when the caller tracks mark-to-market equity itself: the open profit or
+        loss is then already inside `self.equity`, and adding `pnl` again would count it twice.
+        """
         self.positions.pop(symbol)
-        self.mark(self.equity + pnl)
+        self.mark(self.equity + pnl if equity is None else equity)
         if pnl < 0:
             self.consecutive_losses += 1
             self.last_loss_at[symbol] = now

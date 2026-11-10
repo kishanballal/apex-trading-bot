@@ -5,7 +5,11 @@ Every value on a row uses only that row and earlier rows, so nothing leaks from 
 
 from __future__ import annotations
 
+import numpy as np
 import polars as pl
+
+VOL_RANK_LOOKBACK = 252
+VOL_RANK_MIN_SAMPLES = 60
 
 
 def ema(column: str, span: int) -> pl.Expr:
@@ -75,3 +79,30 @@ def add_indicators(frame: pl.DataFrame) -> pl.DataFrame:
         (pl.col("atr14") / pl.col("close")).alias("atr_pct"),
         pl.col("ema200").shift(20).alias("ema200_prev"),
     )
+
+
+def rolling_percentile_rank(
+    values: pl.Series, lookback: int = VOL_RANK_LOOKBACK, min_samples: int = VOL_RANK_MIN_SAMPLES
+) -> pl.Series:
+    """For each row, where its value sits among the last `lookback` values up to and
+    including itself (0 to 1). Null until `min_samples` values exist. Causal by construction."""
+    data = values.to_numpy().astype(float)  # nulls become NaN
+    out: list[float | None] = [None] * len(data)
+    valid = np.flatnonzero(~np.isnan(data))
+    if len(valid) == 0:
+        return pl.Series(values.name, out, dtype=pl.Float64)
+    first = int(valid[0])
+    for i in range(first, len(data)):
+        if np.isnan(data[i]):
+            continue
+        window = data[max(first, i - lookback + 1): i + 1]
+        window = window[~np.isnan(window)]
+        if len(window) >= min_samples:
+            out[i] = float((window < window[-1]).sum()) / (len(window) - 1)
+    return pl.Series(values.name, out, dtype=pl.Float64)
+
+
+def prepare(candles: pl.DataFrame) -> pl.DataFrame:
+    """Sorted candles with every column the scanner, regime detector and backtester need."""
+    frame = add_indicators(candles.sort("ts"))
+    return frame.with_columns(rolling_percentile_rank(frame["atr_pct"]).alias("vol_rank"))

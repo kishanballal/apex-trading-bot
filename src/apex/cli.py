@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from apex.backtest.engine import BacktestConfig, run_backtest
+from apex.backtest.metrics import buy_and_hold, compute_metrics, yearly_table
 from apex.config import Settings, load_universe
 from apex.data.pipeline import build_providers, make_client, update_universe
 from apex.data.store import CandleStore
+from apex.scanner.scanner import STRATEGIES, ScannerConfig
 from apex.service import build_engine, load_state, run_scan, save_report
 
 app = typer.Typer(add_completion=False, help="APEX: selective, risk-first trading system.")
@@ -26,9 +31,12 @@ def _main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
 
 
 @app.command()
-def fetch(interval: str = "1d") -> None:
+def fetch(interval: str = "1d",
+          days: int = typer.Option(0, help="Days of history. Use 3300 before a backtest.")) -> None:
     """Download and validate market data for the whole watchlist."""
     settings = Settings()
+    if days:
+        settings.history_days = days
     groups = load_universe(settings.universe_file)
     store = CandleStore(settings.db_path)
 
@@ -112,6 +120,83 @@ def status() -> None:
                   f"{lim.weekly_drawdown_limit:.2%} weekly, {lim.max_portfolio_drawdown:.2%} max drawdown, "
                   f"{lim.max_positions} positions, {lim.max_position_allocation:.0%} per position, "
                   f"{lim.max_deployed_capital:.0%} deployed.")
+
+
+@app.command()
+def backtest(
+    strategy: str = typer.Option("trend", help=f"One of: {', '.join(STRATEGIES)}"),
+    reset_days: int = typer.Option(
+        -1, help="Simulate a human resetting the drawdown kill switch after this many days. "
+                 "Default: never, which is the real rule."),
+    no_regime: bool = typer.Option(False, help="Research only: ignore the market regime gate."),
+    interval: str = "1d",
+) -> None:
+    """Replay history through the strategy and the risk engine, with costs and delays."""
+    if strategy not in STRATEGIES:
+        raise typer.BadParameter(f"unknown strategy {strategy}")
+    settings = Settings()
+    groups = load_universe(settings.universe_file)
+    store = CandleStore(settings.db_path)
+    candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
+    store.close()
+    config = BacktestConfig(
+        strategy=strategy, capital=settings.capital, usd_inr=settings.usd_inr,
+        kill_switch_reset_days=reset_days if reset_days >= 0 else None,
+        scanner=ScannerConfig(require_regime=not no_regime),
+    )
+    result = run_backtest(groups, candles, config)
+    m = compute_metrics(result)
+    if not result.equity_curve:
+        console.print("[red]No data. Run `apex fetch --days 3300` first.[/red]")
+        raise typer.Exit(1)
+
+    cur = settings.base_currency
+    console.print(f"[bold]{strategy}[/bold] from {m.start} to {m.end} ({m.years:.1f} years), "
+                  f"starting capital {settings.capital:,.0f} {cur}")
+    summary = Table(show_header=False)
+    for label, value in [
+        ("Trades", f"{m.trades}"),
+        ("Win rate", f"{m.win_rate:.1%}"),
+        ("Profit factor", f"{m.profit_factor:.2f}"),
+        ("Expectancy per trade", f"{m.expectancy:,.0f} {cur} ({m.expectancy_r:+.2f} R)"),
+        ("Net profit after costs", f"{m.net_profit:,.0f} {cur}"),
+        ("Estimated tax", f"{m.estimated_tax:,.0f} {cur}"),
+        ("Net profit after tax", f"{m.net_profit_after_tax:,.0f} {cur}"),
+        ("Return per year (CAGR)", f"{m.cagr:.2%}"),
+        ("Maximum drawdown", f"{m.max_drawdown:.2%}"),
+        ("Sharpe / Sortino", f"{m.sharpe:.2f} / {m.sortino:.2f}"),
+        ("Average capital deployed", f"{m.avg_exposure:.1%}"),
+        ("Costs paid", f"{m.total_costs:,.0f} {cur}"),
+        ("Exits", ", ".join(f"{k} {v}" for k, v in m.exit_reasons.items())),
+        ("Kill switch tripped", ", ".join(map(str, result.kill_switch_dates)) or "never"),
+    ]:
+        summary.add_row(label, value)
+    console.print(summary)
+
+    years = Table(title="By calendar year")
+    for col in ("Year", "Return", "Max drawdown", "Trades", "Win rate"):
+        years.add_column(col)
+    table = yearly_table(result)
+    for y in table:
+        years.add_row(str(y["year"]), f"{y['return']:+.2%}", f"{y['max_drawdown']:.2%}",
+                      str(y["trades"]), f"{y['win_rate']:.0%}")
+    console.print(years)
+    holds = {name: buy_and_hold(series) for name, series in result.benchmarks.items()}
+    for name, h in holds.items():
+        console.print(f"Buy and hold {name}: {h['cagr']:.2%} per year, "
+                      f"maximum drawdown {h['max_drawdown']:.2%}")
+    console.print("Past results do not predict future results. The watchlist is today's large "
+                  "companies, which flatters any backtest (survivorship bias).")
+
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    out = settings.data_dir / f"backtest_{strategy}.json"
+    out.write_text(json.dumps({
+        "metrics": asdict(m), "yearly": table, "buy_and_hold": holds,
+        "kill_switch_dates": result.kill_switch_dates, "rejections": result.rejections,
+        "equity_curve": result.equity_curve,
+        "trades": [{**asdict(t), "pnl": t.pnl, "r_multiple": t.r_multiple} for t in result.trades],
+    }, indent=1, default=str), encoding="utf-8")
+    console.print(f"Saved to {out}")
 
 
 if __name__ == "__main__":
