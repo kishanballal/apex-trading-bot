@@ -289,5 +289,62 @@ def research(
                   "same years. Unseen-year results are evidence, not proof.")
 
 
+paper_app = typer.Typer(help="Paper trading with fake money.")
+app.add_typer(paper_app, name="paper")
+
+
+@paper_app.command("init")
+def paper_init(
+    capital: float = typer.Option(50_000.0, help="Fake starting money."),
+    floor: float = typer.Option(40_000.0, help="Trading stops for good if the account gets here."),
+    profile: str = typer.Option("aggressive", help=f"Risk limits: {', '.join(RISK_PROFILES)}"),
+    backfill_days: int = typer.Option(0, help="Demo only: pretend the account started this many "
+                                              "days ago so the dashboard has history to show."),
+) -> None:
+    """Start a fresh paper account and train the model it will trade with."""
+    from datetime import timedelta
+
+    from apex.paper.service import PaperTrader
+
+    trader = PaperTrader(Settings())
+    start = datetime.now(UTC).date() - timedelta(days=backfill_days)
+    console.print("Training the model on all finished trades in the database, please wait.")
+    cfg = trader.init(capital=capital, floor=floor, profile=profile, start=start)
+    console.print(f"Paper account ready: {cfg.capital:,.0f} starting {cfg.start}, floor "
+                  f"{cfg.floor:,.0f}, {cfg.profile} limits. Now run `apex serve`.")
+
+
+@paper_app.command("run")
+def paper_run(no_fetch: bool = typer.Option(False, help="Skip the data download.")) -> None:
+    """Run one paper trading cycle: update data, record predictions, update the account."""
+    from apex.paper.service import PaperTrader
+
+    settings = Settings()
+    if not no_fetch:
+        fetch()
+    trader = PaperTrader(settings)
+    snap = trader.snapshot(trader.cycle())
+    console.print(f"Equity {snap['equity']:,.0f} ({snap['pnl_pct']:+.2%}), "
+                  f"{len(snap['positions'])} open, {len(snap['planned'])} planned for next open, "
+                  f"{snap['stats']['trades']} closed trades. "
+                  f"Room above the floor: {snap['room_to_floor']:,.0f}.")
+    for p in snap["planned"]:
+        console.print(f"  planned buy {p['symbol']}: stop {p['stop']:.2f}, target {p['target']:.2f}")
+    if snap["kill_switch"]:
+        console.print(f"[red]Kill switch active: {snap['kill_reason']}[/red]")
+
+
+@app.command()
+def serve(host: str = "127.0.0.1", port: int = 8000,
+          no_fetch: bool = typer.Option(False, help="Do not download data (offline demo).")) -> None:
+    """Start the dashboard and keep the paper account updated every 30 minutes."""
+    import uvicorn
+
+    from apex.api.app import create_app
+
+    console.print(f"Dashboard: http://{host}:{port}  (leave this window open, Ctrl+C to stop)")
+    uvicorn.run(create_app(Settings(), fetch=not no_fetch), host=host, port=port, log_level="warning")
+
+
 if __name__ == "__main__":
     app()

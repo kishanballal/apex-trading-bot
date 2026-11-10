@@ -3,7 +3,7 @@
 A selective, risk-first trading system. Capital preservation comes first, and
 **NO TRADE is the default answer**. It runs in paper mode. Live trading is locked.
 
-Built so far: the core engine, the backtester and the first ML research.
+Built so far: the core engine, the backtester, ML research, paper trading and the dashboard.
 
 - [Backtest results](docs/backtest-results.md): the two rule-based strategies have no edge worth trading.
 - [ML research results](docs/ml-research-results.md): a simple ML filter shows a promising edge on unseen years. Not proven yet.
@@ -15,39 +15,45 @@ Built so far: the core engine, the backtester and the first ML research.
 | Scanner | Scores every symbol on five independent kinds of evidence and proposes a trade only when at least four agree and the market regime is healthy | `src/apex/scanner/`, `src/apex/analysis/` |
 | Risk engine | Sizes every trade and can veto it. Nothing else in the system can set a position size | `src/apex/risk/` |
 | ML research | Builds a leak-free dataset, compares logistic regression, random forest and XGBoost year by year, and backtests each on years it never saw | `src/apex/ml/` |
+| Paper trading | Replays the tested backtester from the account's start date using predictions stored day by day, so it cannot use hindsight and a restart loses nothing | `src/apex/paper/` |
+| Dashboard | Scanner, price chart with the model's forecast, positions, planned orders, trades and account value | `src/apex/api/` |
 | Backtester | Replays history through the same strategy code and the same risk engine, with costs, next-day fills, gaps and a tax estimate | `src/apex/backtest/` |
 
-## Setup (Windows)
+## Start the paper trading bot (Windows)
 
-1. Install Python 3.13 from python.org and tick "Add Python to PATH".
-2. Open PowerShell in this folder and run:
+1. Install Python 3.11 or newer from python.org and tick "Add Python to PATH".
+2. Double-click `run.bat`.
+
+The first run installs everything, downloads 9 years of prices, trains the model and
+opens a paper account with INR 50,000 of fake money and a INR 40,000 safety floor.
+Then the dashboard opens at http://127.0.0.1:8000. Leave the black window open while
+you want the bot to run. It updates every 30 minutes. If the PC was off for a few
+days, the next start catches up on the missed days.
+
+The bot trades daily candles: it decides after a market close and buys at the next
+open. It stays out when the model is not confident or the market is not trending up,
+so days or weeks with no trades are normal.
+
+To start over with a fresh account: `.venv\Scripts\apex paper init`.
+
+## Commands
 
 ```powershell
-py -3.13 -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-```
-
-On macOS or Linux use `python3.13 -m venv .venv` and `source .venv/bin/activate`.
-
-## Use
-
-```powershell
-pytest              # run the 85 automated tests
-apex fetch          # download and validate market data (about a minute)
-apex scan           # show trades the risk engine would approve
-apex scan --all     # show every symbol and why it was or was not picked
-apex status         # show limits and whether any kill switch is active
-apex fetch --days 3300                # long history, needed once before backtesting
-apex backtest --strategy trend        # or --strategy pullback
-apex backtest --profile moderate      # try looser risk limits (research only)
-pip install -e ".[ml]"                 # once, for the ML tools
+pip install -e ".[dev,ml]"            # extras for tests and research
+pytest                                # run the automated tests
+apex fetch --days 3300                # download and validate market data
+apex scan --all                       # rule-based scanner, every symbol and why
+apex status                           # limits and kill switches
+apex paper init                       # new paper account, retrains the model
+apex paper run                        # one paper cycle without the dashboard
+apex serve                            # dashboard plus automatic updates
+apex backtest --strategy trend        # or --strategy pullback, --profile moderate
 apex research                         # walk-forward ML test, takes a few minutes
-apex ladder                           # dip-buying ladder backtest (50k capital, 40k floor)
+apex ladder                           # dip-buying ladder backtest
 ```
 
-No API keys or accounts are needed at this stage. `apex scan` places no trades.
-It prints a shortlist and saves it to `data/last_scan.json`.
+No API keys or accounts are needed. Nothing here places real orders.
 
 ## How a trade gets proposed
 

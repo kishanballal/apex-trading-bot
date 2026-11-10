@@ -37,6 +37,8 @@ class BacktestConfig:
     # None keeps the real rule: after a 5% drawdown only a human can re-enable trading.
     # A number simulates that human resetting the switch after that many days.
     kill_switch_reset_days: int | None = None
+    # Paper trading replays history up to today and must leave real positions open.
+    close_at_end: bool = True
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
 
 
@@ -77,6 +79,10 @@ class BacktestResult:
     rejections: dict[str, int]
     kill_switch_dates: list[date]
     benchmarks: dict[str, list[tuple[date, float]]]
+    open_positions: list[dict] = field(default_factory=list)  # only when close_at_end=False
+    pending: list[TradeProposal] = field(default_factory=list)  # signals waiting for next open
+    cash: float = 0.0
+    state: PortfolioState | None = None
 
 
 @dataclass
@@ -237,16 +243,31 @@ def run_backtest(
                 pending[symbol] = row.proposal
                 signals += 1
 
-    # Close whatever is still open at the last known price so the result is fully realised.
-    for symbol in list(open_trades):
-        s = series[symbol]
-        close_trade(symbol, last_close[symbol], s.rows[-1]["ts"], "end")
-    if curve:
-        curve[-1] = (curve[-1][0], cash)
+    open_positions: list[dict] = []
+    if cfg.close_at_end:
+        # Close whatever is still open at the last known price so the result is fully realised.
+        for symbol in list(open_trades):
+            s = series[symbol]
+            close_trade(symbol, last_close[symbol], s.rows[-1]["ts"], "end")
+        if curve:
+            curve[-1] = (curve[-1][0], cash)
+    else:
+        for symbol, o in open_trades.items():
+            p = o.position
+            price = last_close[symbol]
+            open_positions.append({
+                "symbol": symbol, "asset_class": p.asset_class.value, "strategy": o.strategy,
+                "quantity": p.quantity, "entry": p.entry, "stop": p.stop, "target": o.target,
+                "last": price, "fx": p.fx_to_base, "entry_time": o.entry_time,
+                "bars_held": o.bars, "value": p.quantity * price * p.fx_to_base,
+                "unrealized": p.quantity * (price - p.entry) * p.fx_to_base - o.entry_cost,
+                "planned_risk": o.planned_risk,
+            })
 
     benchmarks = {}
     for group in groups:
         bench = _Series(group.benchmark, group.asset_class, candles.get(group.benchmark, empty))
         benchmarks[group.benchmark] = [(r["ts"].date(), r["close"]) for r in bench.rows
                                        if days and days[0] <= r["ts"].date() <= days[-1]]
-    return BacktestResult(cfg, curve, exposure, trades, signals, rejections, kill_dates, benchmarks)
+    return BacktestResult(cfg, curve, exposure, trades, signals, rejections, kill_dates, benchmarks,
+                          open_positions, list(pending.values()), cash, state)

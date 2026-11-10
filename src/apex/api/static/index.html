@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX Trading Terminal</title>
+<script src="/static/lightweight-charts.js"></script>
+<style>
+  :root {
+    --bg: #07090d; --panel: #0d1118; --panel-2: #121823; --line: #1c2533;
+    --text: #d7e0ee; --muted: #6f7f97; --green: #2ee6a6; --red: #ff4d6d;
+    --pink: #ff3ea5; --amber: #ffb84d; --blue: #4da3ff;
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  body { padding: 14px; min-height: 100vh;
+    background: radial-gradient(1200px 500px at 80% -10%, rgba(255,62,165,.07), transparent 60%),
+                radial-gradient(900px 500px at 0% 0%, rgba(46,230,166,.06), transparent 60%), var(--bg); }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+  .logo { font-weight: 700; font-size: 18px; letter-spacing: 3px; color: var(--green);
+    text-shadow: 0 0 14px rgba(46,230,166,.5); }
+  .badge { padding: 3px 9px; border: 1px solid var(--line); border-radius: 3px; font-size: 11px;
+    letter-spacing: 1px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .badge.paper { color: var(--amber); border-color: rgba(255,184,77,.5); }
+  .badge.ok { color: var(--green); border-color: rgba(46,230,166,.4); }
+  .badge.bad { color: var(--red); border-color: rgba(255,77,109,.5); }
+  .spacer { flex: 1; }
+  button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 3px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--green); color: var(--green); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; }
+  .kpi .label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .kpi .value { font-size: 20px; font-weight: 700; margin-top: 3px; white-space: nowrap; }
+  .kpi .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: 330px minmax(0, 1fr) 330px; gap: 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+    display: flex; flex-direction: column; min-width: 0; }
+  .panel h2 { margin: 0; padding: 8px 12px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  .panel h2 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 8px var(--green); }
+  .scroll { overflow: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-weight: 400; font-size: 10px; letter-spacing: 1px;
+    text-transform: uppercase; padding: 6px 10px; position: sticky; top: 0; background: var(--panel); }
+  td { padding: 6px 10px; border-top: 1px solid rgba(28,37,51,.6); white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: var(--panel-2); }
+  tr.row.active td { background: rgba(46,230,166,.08); }
+  .up { color: var(--green); } .down { color: var(--red); } .muted { color: var(--muted); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--muted); }
+  .bar.hot i { background: linear-gradient(90deg, var(--green), var(--pink)); }
+  .tag { font-size: 9px; letter-spacing: 1px; padding: 1px 5px; border-radius: 2px; text-transform: uppercase; }
+  .tag.held { background: rgba(46,230,166,.15); color: var(--green); }
+  .tag.planned { background: rgba(255,184,77,.15); color: var(--amber); }
+  .tag.signal { background: rgba(255,62,165,.15); color: var(--pink); }
+  .charthead { display: flex; align-items: baseline; gap: 14px; padding: 10px 12px 0; flex-wrap: wrap; }
+  .charthead .sym { font-size: 20px; font-weight: 700; }
+  .legend { display: flex; gap: 14px; padding: 6px 12px; color: var(--muted); font-size: 11px; flex-wrap: wrap; }
+  .legend span::before { content: ""; display: inline-block; width: 14px; height: 2px; margin-right: 6px;
+    vertical-align: middle; background: currentColor; }
+  .legend .l-pred { color: var(--blue); } .legend .l-fore { color: var(--pink); }
+  .legend .l-band { color: rgba(255,62,165,.45); }
+  #chart { height: 400px; }
+  #equity { height: 170px; }
+  .empty { color: var(--muted); padding: 16px 12px; }
+  .note { color: var(--amber); padding: 0 2px 10px; }
+  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  footer { color: var(--muted); font-size: 11px; margin-top: 12px; }
+  @media (max-width: 1250px) { .grid { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, 1fr); } #chart { height: 300px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">APEX</div>
+  <span class="badge paper">Paper trading · fake money</span>
+  <span id="regimes"></span>
+  <span id="kill" class="badge ok">Kill switch armed</span>
+  <div class="spacer"></div>
+  <span id="updated" class="muted"></span>
+  <button id="refresh">Refresh now</button>
+</header>
+<div id="note" class="note" hidden></div>
+<section class="kpis" id="kpis"></section>
+<section class="grid">
+  <div class="panel" style="max-height: 760px">
+    <h2><span class="dot"></span>Market scanner</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Symbol</th><th class="num">Price</th><th class="num">Win chance</th><th class="num">10d forecast</th></tr></thead>
+      <tbody id="scanner"></tbody>
+    </table></div>
+  </div>
+  <div class="col">
+    <div class="panel">
+      <div class="charthead">
+        <span class="sym" id="sym">-</span>
+        <span id="symprice"></span>
+        <span id="symprob" class="muted"></span>
+      </div>
+      <div class="legend">
+        <span class="l-pred">Model's next-day prediction</span>
+        <span class="l-fore">Model's 10-day forecast</span>
+        <span class="l-band">Likely range</span>
+      </div>
+      <div id="chart"></div>
+    </div>
+    <div class="panel">
+      <h2><span class="dot"></span>Account value</h2>
+      <div id="equity"></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="panel"><h2><span class="dot"></span>Open positions</h2><div class="scroll" id="positions"></div></div>
+    <div class="panel"><h2><span class="dot"></span>Planned for next open</h2><div class="scroll" id="planned"></div></div>
+    <div class="panel" style="max-height: 330px"><h2><span class="dot"></span>Closed trades</h2><div class="scroll" id="trades"></div></div>
+  </div>
+</section>
+<footer>Predictions are estimates and are often wrong. Paper results do not guarantee real results. Data: Yahoo Finance and Binance, daily candles.</footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const money = (v, d = 0) => (v < 0 ? "-" : "") + "₹" + Math.abs(Number(v)).toLocaleString("en-IN", { maximumFractionDigits: d, minimumFractionDigits: d });
+const price = (v) => v >= 1000 ? v.toLocaleString("en-IN", { maximumFractionDigits: 1 }) : v >= 1 ? v.toFixed(2) : v.toPrecision(4);
+const pct = (v, d = 1) => (v >= 0 ? "+" : "") + (v * 100).toFixed(d) + "%";
+const cls = (v) => v > 0 ? "up" : v < 0 ? "down" : "muted";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let state = null, selected = null, chart, candleSeries, predSeries, foreSeries, lowSeries, highSeries, eqChart, eqSeries, priceLines = [];
+const chartOpts = {
+  layout: { background: { color: "transparent" }, textColor: "#6f7f97", fontFamily: "Consolas, Menlo, monospace" },
+  grid: { vertLines: { color: "rgba(28,37,51,.5)" }, horzLines: { color: "rgba(28,37,51,.5)" } },
+  rightPriceScale: { borderColor: "#1c2533" }, timeScale: { borderColor: "#1c2533" },
+  crosshair: { mode: 0 }, autoSize: true,
+};
+
+function setupCharts() {
+  chart = LightweightCharts.createChart($("chart"), chartOpts);
+  highSeries = chart.addLineSeries({ color: "rgba(255,62,165,.4)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  lowSeries = chart.addLineSeries({ color: "rgba(255,62,165,.4)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  candleSeries = chart.addCandlestickSeries({ upColor: "#2ee6a6", downColor: "#ff4d6d", borderVisible: false, wickUpColor: "#2ee6a6", wickDownColor: "#ff4d6d" });
+  predSeries = chart.addLineSeries({ color: "#4da3ff", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  foreSeries = chart.addLineSeries({ color: "#ff3ea5", lineWidth: 3, priceLineVisible: false });
+  eqChart = LightweightCharts.createChart($("equity"), chartOpts);
+  eqSeries = eqChart.addAreaSeries({ lineColor: "#2ee6a6", topColor: "rgba(46,230,166,.35)", bottomColor: "rgba(46,230,166,0)", lineWidth: 2 });
+}
+
+function kpi(label, value, sub, c = "") {
+  return `<div class="kpi"><div class="label">${label}</div><div class="value ${c}">${value}</div><div class="sub">${sub}</div></div>`;
+}
+
+function render() {
+  const s = state, cfg = s.config;
+  $("kpis").innerHTML =
+    kpi("Account value", money(s.equity), "started with " + money(cfg.capital)) +
+    kpi("Profit / loss", money(s.pnl), pct(s.pnl_pct, 2), cls(s.pnl)) +
+    kpi("Drop from peak", (s.drawdown * 100).toFixed(1) + "%", "peak " + money(s.peak), s.drawdown > 0.1 ? "down" : "") +
+    kpi("Room above floor", money(s.room_to_floor), "floor " + money(cfg.floor), s.room_to_floor < 3000 ? "down" : "up") +
+    kpi("Invested now", (s.stats.exposure * 100).toFixed(0) + "%", s.positions.length + " open · " + s.planned.length + " planned") +
+    kpi("Closed trades", s.stats.trades, s.stats.trades ? (s.stats.win_rate * 100).toFixed(0) + "% won" : "none yet");
+
+  $("regimes").innerHTML = Object.entries(s.regimes).map(([k, r]) =>
+    `<span class="badge ${r.allows_longs ? "ok" : ""}">${k === "equity" ? "Stocks" : "Crypto"}: ${r.trend}${r.high_volatility ? " · volatile" : ""}${r.allows_longs ? "" : " · standing aside"}</span>`).join(" ");
+  $("kill").className = "badge " + (s.kill_switch ? "bad" : "ok");
+  $("kill").textContent = s.kill_switch ? "Trading stopped: " + s.kill_reason : "Safety floor armed";
+  $("updated").textContent = "Day " + s.days_running + " · last candle " + (s.last_bar || "-") + " · updated " + new Date(s.generated_at).toLocaleTimeString();
+  $("note").hidden = !s.note; $("note").textContent = s.note || "";
+
+  $("scanner").innerHTML = s.scanner.map((r) => `
+    <tr class="row ${r.symbol === selected ? "active" : ""}" data-symbol="${esc(r.symbol)}">
+      <td>${esc(r.symbol)} ${r.status !== "watch" ? `<span class="tag ${r.status}">${r.status}</span>` : ""}</td>
+      <td class="num">${price(r.close)}</td>
+      <td class="num">${(r.p * 100).toFixed(0)}%<div class="bar ${r.p >= cfg.threshold ? "hot" : ""}"><i style="width:${Math.min(100, r.p * 100 / 0.7)}%"></i></div></td>
+      <td class="num ${cls(r.forecast_10d)}">${pct(r.forecast_10d)}</td>
+    </tr>`).join("") || `<tr><td colspan="4" class="empty">No predictions yet. They appear after the first market close.</td></tr>`;
+
+  $("positions").innerHTML = s.positions.length ? `<table><thead><tr><th>Symbol</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Now</th><th class="num">P/L</th></tr></thead><tbody>` +
+    s.positions.map((p) => `<tr class="row" data-symbol="${esc(p.symbol)}"><td>${esc(p.symbol)}</td><td class="num">${+p.quantity.toFixed(4)}</td><td class="num">${price(p.entry)}</td><td class="num">${price(p.last)}</td><td class="num ${cls(p.unrealized)}">${money(p.unrealized)}</td></tr>
+      <tr><td colspan="5" class="muted">stop ${price(p.stop)} · target ${price(p.target)} · day ${p.bars_held}</td></tr>`).join("") + "</tbody></table>"
+    : `<div class="empty">No open positions. The bot only buys when the model is confident and the market is trending up.</div>`;
+
+  $("planned").innerHTML = s.planned.length ? `<table><thead><tr><th>Symbol</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Chance</th></tr></thead><tbody>` +
+    s.planned.map((p) => `<tr class="row" data-symbol="${esc(p.symbol)}"><td>${esc(p.symbol)}</td><td class="num">${price(p.stop)}</td><td class="num">${price(p.target)}</td><td class="num">${p.score.toFixed(0)}%</td></tr>`).join("") + "</tbody></table>"
+    : `<div class="empty">Nothing planned.</div>`;
+
+  const trades = s.trades.slice().reverse();
+  $("trades").innerHTML = trades.length ? `<table><thead><tr><th>Symbol</th><th>Exit</th><th>Why</th><th class="num">P/L</th></tr></thead><tbody>` +
+    trades.map((t) => `<tr class="row" data-symbol="${esc(t.symbol)}"><td>${esc(t.symbol)}</td><td class="muted">${t.exit_time.slice(5, 10)}</td><td class="muted">${t.reason}</td><td class="num ${cls(t.pnl)}">${money(t.pnl)}</td></tr>`).join("") + "</tbody></table>"
+    : `<div class="empty">No closed trades yet.</div>`;
+
+  eqSeries.setData(s.equity_curve.map((e) => ({ time: e.date, value: e.equity })));
+  eqSeries.createPriceLine && !eqSeries._floor && (eqSeries._floor = eqSeries.createPriceLine({ price: cfg.floor, color: "#ff4d6d", lineStyle: 2, lineWidth: 1, title: "floor" }));
+  eqChart.timeScale().fitContent();
+  document.querySelectorAll("tr.row").forEach((tr) => tr.onclick = () => select(tr.dataset.symbol));
+}
+
+async function select(symbol) {
+  selected = symbol;
+  document.querySelectorAll("#scanner tr.row").forEach((tr) => tr.classList.toggle("active", tr.dataset.symbol === symbol));
+  const c = await (await fetch("/api/chart?symbol=" + encodeURIComponent(symbol))).json();
+  if (selected !== symbol || !c.candles) return;
+  const last = c.candles[c.candles.length - 1], prev = c.candles[c.candles.length - 2] || last;
+  $("sym").textContent = symbol;
+  $("symprice").innerHTML = `${price(last.close)} <span class="${cls(last.close - prev.close)}">${pct(last.close / prev.close - 1, 2)}</span>`;
+  $("symprob").textContent = c.win_probability == null ? "" : "model win chance " + (c.win_probability * 100).toFixed(0) + "%";
+  candleSeries.setData(c.candles);
+  predSeries.setData(c.predicted);
+  foreSeries.setData(c.forecast.map((f) => ({ time: f.time, value: f.mid })));
+  lowSeries.setData(c.forecast.map((f) => ({ time: f.time, value: f.low })));
+  highSeries.setData(c.forecast.map((f) => ({ time: f.time, value: f.high })));
+  const times = new Set(c.candles.map((k) => k.time));
+  candleSeries.setMarkers(c.markers.filter((m) => times.has(m.time)).map((m) => m.kind === "buy"
+    ? { time: m.time, position: "belowBar", color: "#2ee6a6", shape: "arrowUp", text: "BUY" }
+    : { time: m.time, position: "aboveBar", color: m.pnl >= 0 ? "#2ee6a6" : "#ff4d6d", shape: "arrowDown", text: "SELL" }));
+  priceLines.forEach((l) => candleSeries.removePriceLine(l)); priceLines = [];
+  if (c.position) {
+    priceLines.push(candleSeries.createPriceLine({ price: c.position.stop, color: "#ff4d6d", lineStyle: 2, lineWidth: 1, title: "stop" }));
+    priceLines.push(candleSeries.createPriceLine({ price: c.position.target, color: "#2ee6a6", lineStyle: 2, lineWidth: 1, title: "target" }));
+    priceLines.push(candleSeries.createPriceLine({ price: c.position.entry, color: "#ffb84d", lineStyle: 1, lineWidth: 1, title: "entry" }));
+  }
+  const n = c.candles.length + Math.max(c.forecast.length - 1, 0);
+  chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 90), to: n + 2 });
+}
+
+async function load(refresh = false) {
+  const btn = $("refresh"); btn.disabled = true; btn.textContent = refresh ? "Updating..." : "Loading...";
+  try {
+    const res = await fetch(refresh ? "/api/refresh" : "/api/state", { method: refresh ? "POST" : "GET" });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    state = body; render();
+    const first = selected || (state.positions[0] || state.planned[0] || state.scanner[0] || {}).symbol;
+    if (first) await select(first);
+  } catch (e) {
+    $("note").hidden = false; $("note").textContent = "Could not load: " + e.message;
+  } finally { btn.disabled = false; btn.textContent = "Refresh now"; }
+}
+
+setupCharts();
+load();
+$("refresh").onclick = () => load(true);
+setInterval(() => load(false), 60000);
+</script>
+</body>
+</html>

@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     http_timeout: float = 20.0
     http_retries: int = 3
     max_concurrency: int = 5
-    history_days: int = 730
+    history_days: int = 3300  # long history: the model is trained on it
 
     # Live trading stays locked until the later, explicitly authorised stage.
     live_authorized: bool = False

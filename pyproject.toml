@@ -2,7 +2,7 @@
 name = "apex"
 version = "0.1.0"
 description = "APEX: a selective, risk-first autonomous trading system (paper trading by default)"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "polars>=1.0",
     "numpy>=2.0",
@@ -11,7 +11,13 @@ dependencies = [
     "pydantic-settings>=2.3",
     "typer>=0.12",
     "rich>=13.0",
+    "scikit-learn>=1.5",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
+
+[tool.setuptools.package-data]
+apex = ["api/static/*"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
