@@ -7,6 +7,7 @@ Built so far: the core engine, the backtester and the first ML research.
 
 - [Backtest results](docs/backtest-results.md): the two rule-based strategies have no edge worth trading.
 - [ML research results](docs/ml-research-results.md): a simple ML filter shows a promising edge on unseen years. Not proven yet.
+- [Higher risk, dip-buying and deep learning](docs/higher-risk-and-deep-learning.md): dip-buying with averaging down loses money. The ML filter sized for a 20% drawdown budget beat the index on unseen years. A GRU matches the simple model.
 
 | Part | What it does | Where |
 | --- | --- | --- |
@@ -32,7 +33,7 @@ On macOS or Linux use `python3.13 -m venv .venv` and `source .venv/bin/activate`
 ## Use
 
 ```powershell
-pytest              # run the 76 automated tests
+pytest              # run the 85 automated tests
 apex fetch          # download and validate market data (about a minute)
 apex scan           # show trades the risk engine would approve
 apex scan --all     # show every symbol and why it was or was not picked
@@ -42,6 +43,7 @@ apex backtest --strategy trend        # or --strategy pullback
 apex backtest --profile moderate      # try looser risk limits (research only)
 pip install -e ".[ml]"                 # once, for the ML tools
 apex research                         # walk-forward ML test, takes a few minutes
+apex ladder                           # dip-buying ladder backtest (50k capital, 40k floor)
 ```
 
 No API keys or accounts are needed at this stage. `apex scan` places no trades.
@@ -106,7 +108,8 @@ folder. Edit `config/universe.toml` to change the watchlist.
   Intraday needs better data than the free sources give.
 - The rule-based strategies show no edge. The ML filter looks promising on unseen
   years and still has to prove itself in paper trading.
-- LSTM, Transformer and Kronos models have not been tested yet.
+- A GRU deep learning model was tested (`src/apex/ml/sequence.py`, needs `pip install -e ".[dl]"`).
+  Transformer and Kronos models have not been tested yet.
 - Storage is a local SQLite file. PostgreSQL, Redis and Docker arrive with the
   dashboard stage, when several services need to share data.
 

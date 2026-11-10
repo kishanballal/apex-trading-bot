@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 ml = ["scikit-learn>=1.5", "xgboost>=2.0"]
+dl = ["scikit-learn>=1.5", "torch>=2.4"]
 
 [project.scripts]
 apex = "apex.cli:app"

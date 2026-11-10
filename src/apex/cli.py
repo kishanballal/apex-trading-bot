@@ -122,38 +122,15 @@ def status() -> None:
                   f"{lim.max_deployed_capital:.0%} deployed.")
 
 
-@app.command()
-def backtest(
-    strategy: str = typer.Option("trend", help=f"One of: {', '.join(STRATEGIES)}"),
-    reset_days: int = typer.Option(
-        -1, help="Simulate a human resetting the drawdown kill switch after this many days. "
-                 "Default: never, which is the real rule."),
-    no_regime: bool = typer.Option(False, help="Research only: ignore the market regime gate."),
-    profile: str = typer.Option("current", help=f"Risk limits: {', '.join(RISK_PROFILES)}"),
-    interval: str = "1d",
-) -> None:
-    """Replay history through the strategy and the risk engine, with costs and delays."""
-    if strategy not in STRATEGIES:
-        raise typer.BadParameter(f"unknown strategy {strategy}")
-    settings = Settings()
-    groups = load_universe(settings.universe_file)
-    store = CandleStore(settings.db_path)
-    candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
-    store.close()
-    config = BacktestConfig(
-        strategy=strategy, capital=settings.capital, usd_inr=settings.usd_inr,
-        kill_switch_reset_days=reset_days if reset_days >= 0 else None,
-        scanner=ScannerConfig(require_regime=not no_regime),
-    )
-    result = run_backtest(groups, candles, config, limits=risk_profile(profile))
+def _report(result, settings: Settings, title: str) -> None:
     m = compute_metrics(result)
     if not result.equity_curve:
         console.print("[red]No data. Run `apex fetch --days 3300` first.[/red]")
         raise typer.Exit(1)
 
     cur = settings.base_currency
-    console.print(f"[bold]{strategy}[/bold] from {m.start} to {m.end} ({m.years:.1f} years), "
-                  f"starting capital {settings.capital:,.0f} {cur}")
+    console.print(f"[bold]{title}[/bold] from {m.start} to {m.end} ({m.years:.1f} years), "
+                  f"starting capital {result.config.capital:,.0f} {cur}")
     summary = Table(show_header=False)
     for label, value in [
         ("Trades", f"{m.trades}"),
@@ -190,7 +167,7 @@ def backtest(
                   "companies, which flatters any backtest (survivorship bias).")
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    out = settings.data_dir / f"backtest_{strategy}.json"
+    out = settings.data_dir / f"backtest_{title}.json"
     out.write_text(json.dumps({
         "metrics": asdict(m), "yearly": table, "buy_and_hold": holds,
         "kill_switch_dates": result.kill_switch_dates, "rejections": result.rejections,
@@ -198,6 +175,55 @@ def backtest(
         "trades": [{**asdict(t), "pnl": t.pnl, "r_multiple": t.r_multiple} for t in result.trades],
     }, indent=1, default=str), encoding="utf-8")
     console.print(f"Saved to {out}")
+
+
+
+
+@app.command()
+def backtest(
+    strategy: str = typer.Option("trend", help=f"One of: {', '.join(STRATEGIES)}"),
+    reset_days: int = typer.Option(
+        -1, help="Simulate a human resetting the drawdown kill switch after this many days. "
+                 "Default: never, which is the real rule."),
+    no_regime: bool = typer.Option(False, help="Research only: ignore the market regime gate."),
+    profile: str = typer.Option("current", help=f"Risk limits: {', '.join(RISK_PROFILES)}"),
+    interval: str = "1d",
+) -> None:
+    """Replay history through the strategy and the risk engine, with costs and delays."""
+    if strategy not in STRATEGIES:
+        raise typer.BadParameter(f"unknown strategy {strategy}")
+    settings = Settings()
+    groups = load_universe(settings.universe_file)
+    store = CandleStore(settings.db_path)
+    candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
+    store.close()
+    config = BacktestConfig(
+        strategy=strategy, capital=settings.capital, usd_inr=settings.usd_inr,
+        kill_switch_reset_days=reset_days if reset_days >= 0 else None,
+        scanner=ScannerConfig(require_regime=not no_regime),
+    )
+    _report(run_backtest(groups, candles, config, limits=risk_profile(profile)), settings, strategy)
+
+
+@app.command()
+def ladder(
+    capital: float = typer.Option(50_000.0, help="Starting capital."),
+    floor: float = typer.Option(40_000.0, help="The account is liquidated before it gets here."),
+    no_uptrend: bool = typer.Option(False, help="Also buy dips in stocks below their 200-day average."),
+    interval: str = "1d",
+) -> None:
+    """Backtest the dip-buying ladder: buy a dip once it turns up, add on further dips,
+    sell at a profit threshold."""
+    from apex.backtest.ladder import LadderConfig, run_ladder
+
+    settings = Settings()
+    groups = load_universe(settings.universe_file)
+    store = CandleStore(settings.db_path)
+    candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
+    store.close()
+    config = LadderConfig(capital=capital, floor=floor, usd_inr=settings.usd_inr,
+                          require_uptrend=not no_uptrend)
+    _report(run_ladder(groups, candles, config), settings, "dip_ladder")
 
 
 @app.command()
