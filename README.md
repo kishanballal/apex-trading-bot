@@ -3,15 +3,17 @@
 A selective, risk-first trading system. Capital preservation comes first, and
 **NO TRADE is the default answer**. It runs in paper mode. Live trading is locked.
 
-Stages 1 and 2 of 4 are built: the core engine and the backtester.
-Backtest findings are in [docs/backtest-results.md](docs/backtest-results.md). Short version:
-the baseline strategies do not yet have an edge worth trading.
+Built so far: the core engine, the backtester and the first ML research.
+
+- [Backtest results](docs/backtest-results.md): the two rule-based strategies have no edge worth trading.
+- [ML research results](docs/ml-research-results.md): a simple ML filter shows a promising edge on unseen years. Not proven yet.
 
 | Part | What it does | Where |
 | --- | --- | --- |
 | Data pipeline | Downloads daily candles for NSE stocks (Yahoo Finance) and crypto (Binance public data), validates them, stores them in a local SQLite file | `src/apex/data/` |
 | Scanner | Scores every symbol on five independent kinds of evidence and proposes a trade only when at least four agree and the market regime is healthy | `src/apex/scanner/`, `src/apex/analysis/` |
 | Risk engine | Sizes every trade and can veto it. Nothing else in the system can set a position size | `src/apex/risk/` |
+| ML research | Builds a leak-free dataset, compares logistic regression, random forest and XGBoost year by year, and backtests each on years it never saw | `src/apex/ml/` |
 | Backtester | Replays history through the same strategy code and the same risk engine, with costs, next-day fills, gaps and a tax estimate | `src/apex/backtest/` |
 
 ## Setup (Windows)
@@ -30,13 +32,16 @@ On macOS or Linux use `python3.13 -m venv .venv` and `source .venv/bin/activate`
 ## Use
 
 ```powershell
-pytest              # run the 69 automated tests
+pytest              # run the 76 automated tests
 apex fetch          # download and validate market data (about a minute)
 apex scan           # show trades the risk engine would approve
 apex scan --all     # show every symbol and why it was or was not picked
 apex status         # show limits and whether any kill switch is active
 apex fetch --days 3300                # long history, needed once before backtesting
 apex backtest --strategy trend        # or --strategy pullback
+apex backtest --profile moderate      # try looser risk limits (research only)
+pip install -e ".[ml]"                 # once, for the ML tools
+apex research                         # walk-forward ML test, takes a few minutes
 ```
 
 No API keys or accounts are needed at this stage. `apex scan` places no trades.
@@ -99,7 +104,9 @@ folder. Edit `config/universe.toml` to change the watchlist.
   paper trading and not good enough for live or intraday trading.
 - Two swing strategies only (trend continuation and pullback), both long only.
   Intraday needs better data than the free sources give.
-- **The backtests show no edge worth trading yet.** See the results document.
+- The rule-based strategies show no edge. The ML filter looks promising on unseen
+  years and still has to prove itself in paper trading.
+- LSTM, Transformer and Kronos models have not been tested yet.
 - Storage is a local SQLite file. PostgreSQL, Redis and Docker arrive with the
   dashboard stage, when several services need to share data.
 

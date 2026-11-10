@@ -40,6 +40,22 @@ class RiskLimits(BaseSettings):
     max_consecutive_losses: int = Field(3, ge=1)  # then no new trades until the next day
 
 
+# Named risk profiles for research. "current" is the project brief and the only one used live.
+RISK_PROFILES: dict[str, dict] = {
+    "current": {},
+    "moderate": dict(risk_per_trade=0.005, daily_loss_limit=0.015, weekly_drawdown_limit=0.04,
+                     max_portfolio_drawdown=0.10, max_positions=6,
+                     max_position_allocation=0.10, max_deployed_capital=0.50),
+    "aggressive": dict(risk_per_trade=0.01, daily_loss_limit=0.03, weekly_drawdown_limit=0.08,
+                       max_portfolio_drawdown=0.20, max_positions=8,
+                       max_position_allocation=0.20, max_deployed_capital=1.0),
+}
+
+
+def risk_profile(name: str) -> RiskLimits:
+    return RiskLimits(**RISK_PROFILES[name])
+
+
 class CostModel(BaseSettings):
     """Per-side cost assumptions as fractions of traded value. Deliberately conservative."""
 

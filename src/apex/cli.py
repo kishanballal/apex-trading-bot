@@ -14,7 +14,7 @@ from rich.table import Table
 
 from apex.backtest.engine import BacktestConfig, run_backtest
 from apex.backtest.metrics import buy_and_hold, compute_metrics, yearly_table
-from apex.config import Settings, load_universe
+from apex.config import RISK_PROFILES, Settings, load_universe, risk_profile
 from apex.data.pipeline import build_providers, make_client, update_universe
 from apex.data.store import CandleStore
 from apex.scanner.scanner import STRATEGIES, ScannerConfig
@@ -129,6 +129,7 @@ def backtest(
         -1, help="Simulate a human resetting the drawdown kill switch after this many days. "
                  "Default: never, which is the real rule."),
     no_regime: bool = typer.Option(False, help="Research only: ignore the market regime gate."),
+    profile: str = typer.Option("current", help=f"Risk limits: {', '.join(RISK_PROFILES)}"),
     interval: str = "1d",
 ) -> None:
     """Replay history through the strategy and the risk engine, with costs and delays."""
@@ -144,7 +145,7 @@ def backtest(
         kill_switch_reset_days=reset_days if reset_days >= 0 else None,
         scanner=ScannerConfig(require_regime=not no_regime),
     )
-    result = run_backtest(groups, candles, config)
+    result = run_backtest(groups, candles, config, limits=risk_profile(profile))
     m = compute_metrics(result)
     if not result.equity_curve:
         console.print("[red]No data. Run `apex fetch --days 3300` first.[/red]")
@@ -197,6 +198,69 @@ def backtest(
         "trades": [{**asdict(t), "pnl": t.pnl, "r_multiple": t.r_multiple} for t in result.trades],
     }, indent=1, default=str), encoding="utf-8")
     console.print(f"Saved to {out}")
+
+
+@app.command()
+def research(
+    first_test_year: int = 2021,
+    threshold: float = typer.Option(0.45, help="Minimum predicted win probability to trade."),
+    profile: str = typer.Option("current", help=f"Risk limits: {', '.join(RISK_PROFILES)}"),
+    interval: str = "1d",
+) -> None:
+    """Walk-forward test of the ML models, then backtest each one on years it never saw.
+    Needs the extras: pip install -e ".[ml]"."""
+    from datetime import date
+
+    from apex.ml.dataset import build_dataset
+    from apex.ml.strategy import make_table_strategy
+    from apex.ml.walkforward import walk_forward
+
+    settings = Settings()
+    groups = load_universe(settings.universe_file)
+    store = CandleStore(settings.db_path)
+    candles = {s: store.load(s, interval) for g in groups for s in (g.benchmark, *g.symbols)}
+    store.close()
+    data = build_dataset(groups, candles)
+    if data.is_empty():
+        console.print("[red]No data. Run `apex fetch --days 3300` first.[/red]")
+        raise typer.Exit(1)
+    last_year = data["date"].max().year
+    console.print(f"{data.height:,} samples. Training and testing year by year, please wait.")
+    predictions, scores = walk_forward(data, list(range(first_test_year, last_year + 1)))
+
+    folds = Table(title="Prediction quality on unseen years (AUC 0.50 is a coin flip)")
+    for col in ("Model", "Year", "AUC", "Brier", "Brier of base rate", "Top 10% win", "All win"):
+        folds.add_column(col)
+    for sc in scores:
+        folds.add_row(sc.model, str(sc.year), f"{sc.auc:.3f}", f"{sc.brier:.4f}",
+                      f"{sc.brier_baseline:.4f}", f"{sc.top_decile_win:.1%}", f"{sc.base_rate:.1%}")
+    console.print(folds)
+
+    limits = risk_profile(profile)
+    start = date(first_test_year, 1, 1)
+    results = Table(title=f"Backtest on unseen years from {first_test_year}, {profile} limits")
+    for col in ("Strategy", "Trades", "Win rate", "Profit factor", "Avg R", "Net profit",
+                "After tax", "Per year", "Max drawdown"):
+        results.add_column(col)
+
+    def run(name: str, strategy: str) -> None:
+        cfg = BacktestConfig(strategy=strategy, capital=settings.capital, usd_inr=settings.usd_inr,
+                             start=start, kill_switch_reset_days=90)
+        m = compute_metrics(run_backtest(groups, candles, cfg, limits=limits))
+        results.add_row(name, str(m.trades), f"{m.win_rate:.0%}", f"{m.profit_factor:.2f}",
+                        f"{m.expectancy_r:+.2f}", f"{m.net_profit:,.0f}",
+                        f"{m.net_profit_after_tax:,.0f}", f"{m.cagr:.2%}", f"{m.max_drawdown:.2%}")
+
+    run("trend (no ML)", "trend")
+    run("pullback (no ML)", "pullback")
+    for model in [c for c in predictions.columns if c not in ("symbol", "date", "ts", "y", "r")]:
+        table = {(a, b): c for a, b, c in predictions.select("symbol", "date", model).iter_rows()}
+        STRATEGIES["_ml"] = make_table_strategy(f"ml_{model}", table, threshold)
+        run(f"{model} p >= {threshold:.2f}", "_ml")
+    STRATEGIES.pop("_ml", None)
+    console.print(results)
+    console.print("The kill switch is reset after 90 days in these runs so all rows cover the "
+                  "same years. Unseen-year results are evidence, not proof.")
 
 
 if __name__ == "__main__":
