@@ -87,3 +87,25 @@ could change that, but there is no free archive of past headlines, so it can onl
 by collecting live data in paper trading.
 
 Run it again with `python -m apex.intraday.nse`.
+
+# Kronos-small test (2026-11-11, run on the owner's RTX 5060)
+
+`tools/kronos_test.py` gave the pretrained Kronos-small model the 400 bars before each moment
+and asked it for the next 30 minutes. That covered 3,841 moments from the same 60 NSE sessions,
+which came after the model's release.
+
+| Group | n | Direction hit | Correlation |
+|---|---|---|---|
+| all | 3,841 | 49.9% | 0.016 |
+| sudden drops | 318 | 52.5% | 0.048 |
+| sudden spikes | 523 | 53.9% | -0.065 |
+| normal bars | 3,000 | 49.0% | 0.030 |
+
+The trade tests, with fees and before tax:
+- Buy any move Kronos rates at +0.3% or more: 139 trades, profit factor 0.70, -1,011.
+- Buy drops it expects to bounce: 113 trades, gross edge +0.083% per trade, profit factor 0.79, -571.
+- Buy spikes it expects to continue: 41 trades, profit factor 0.58, -460.
+- The plain dip-bounce rule without Kronos: 80 trades, gross edge +0.048%, profit factor 0.74, -627.
+
+Out of the box, Kronos predicts 5-minute NSE moves no better than a coin flip. It slightly
+improves the dip-bounce picks before fees, but not by enough to cover them. Not adopted.
