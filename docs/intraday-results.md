@@ -60,3 +60,30 @@ winners still turns them into -54 to -1,281. At 0.2% (Indian app fees) every row
   times cheaper than crypto here. Free minute data comes from a broker API (for example Angel
   One SmartAPI) or a short Yahoo history (5-minute bars for 60 days).
 - Slower crypto (15-minute to 4-hour holds) where the ML edge per trade is larger than fees.
+
+# Intraday step 2: NSE "sudden move" test on 5-minute bars (2026-11-11)
+
+The owner asked for active trading that catches sudden rises and buys sharp falls.
+`src/apex/intraday/nse.py` tests exactly that on free Yahoo 5-minute candles for the 50 NSE
+stocks (about 60 sessions, Aug to Nov 2026). Every trade closes the same day. Costs are
+discount-broker intraday charges (about 0.106% per round trip) plus 0.02% slippage per side.
+Intraday profit is business income taxed at your slab rate after offsetting losses, so the
+table shows profit before tax. Volume bursts are compared with the same time slot on earlier
+days, so the 9:15 opening rush does not count as a burst.
+
+| Strategy | Trades/day | Gross edge per trade | Before costs | After costs |
+|---|---|---|---|---|
+| Spike: 3-sigma jump on 3x volume, buy for continuation | 5.7 | -0.010% | -272 | -4,263 |
+| Crash bounce: 3-sigma drop on 3x volume, buy the first green bar | 1.3 | +0.048% | +305 | -629 |
+| Opening-range breakout | 6.1 | +0.006% | +175 | -4,086 |
+| ML model, 30-minute hold, weekly walk-forward | 32 | -0.002% | -169 | -14,851 |
+
+The ML model's weekly AUC was 0.50 to 0.59, so it barely beat a coin flip. 60 sessions is a
+short sample, and the crash-bounce result (80 trades) is within noise.
+
+Takeaway: on free 5-minute price data, sudden moves in large NSE stocks carry no edge even
+before costs. The move is already in the price by the time a 5-minute candle closes. News
+could change that, but there is no free archive of past headlines, so it can only be judged
+by collecting live data in paper trading.
+
+Run it again with `python -m apex.intraday.nse`.

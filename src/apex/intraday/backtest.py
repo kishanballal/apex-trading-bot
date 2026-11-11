@@ -34,7 +34,9 @@ class Exits:
 
 
 def run(df: pd.DataFrame, signal: np.ndarray, exits: Exits, costs: Costs,
-        delay: int = 0, symbol: str = "") -> pd.DataFrame:
+        delay: int = 0, symbol: str = "", last_bar: np.ndarray | None = None) -> pd.DataFrame:
+    """`last_bar[i]`, if given, is the index of the final bar a trade entered at i may use
+    (for stocks: the session's last bar, so every position is closed the same day)."""
     o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
     atr = df["atr"].to_numpy(float)
     sma = df["sma60"].to_numpy(float) if exits.exit_on_mean else None
@@ -53,6 +55,10 @@ def run(df: pd.DataFrame, signal: np.ndarray, exits: Exits, costs: Costs,
         stop = o[e] - exits.stop_atr * atr[t]
         target = o[e] + exits.target_atr * atr[t] if exits.target_atr else np.inf
         last = min(e + exits.max_hold - 1, n - 1)
+        if last_bar is not None:
+            if last_bar[t] != last_bar[e]:
+                continue  # never carry a signal into the next session
+            last = min(last, int(last_bar[e]))
         exit_px, j, why = c[last], last, "time"
         for j in range(e, last + 1):
             if lo[j] <= stop:

@@ -97,3 +97,26 @@ def test_walk_forward_only_signals_after_training_months():
                                     top_frac=0.05)
     first_test = f.ts.min() + 2 * model.MONTH_MS
     assert folds and not sig["X"][(f.ts < first_test).to_numpy()].any()
+
+
+def test_positions_close_at_session_end_and_signals_do_not_carry_over():
+    df = _with_atr(_bars([100] * 10, spread=0))
+    last_bar = np.array([4] * 5 + [9] * 5)
+    sig = np.zeros(len(df), bool)
+    sig[[2, 4]] = True  # bar 4 is the session's last bar: its fill would be next session
+    t = backtest.run(df, sig, backtest.Exits(stop_atr=50, target_atr=None, max_hold=20),
+                     backtest.Costs(0, 0, 0), last_bar=last_bar)
+    assert len(t) == 1
+    assert t.exit_ts.iloc[0] == 4 * 60_000
+
+
+def test_nse_features_reset_each_session():
+    from apex.intraday import nse
+    day = 86_400_000
+    ts = np.concatenate([np.arange(75) * nse.BAR_MS + 13_500_000 + d * day for d in range(3)])
+    df = _bars(np.linspace(100, 110, len(ts)))
+    df["ts"] = ts
+    f = nse.build(df)
+    assert f.minute_of_day.iloc[0] == 0 and f.minute_of_day.iloc[74] == 370
+    assert (f.last_bar.iloc[:75] == 74).all() and (f.last_bar.iloc[75:150] == 149).all()
+    assert f.r_day.iloc[75] == pytest.approx(0.0, abs=1e-12)
