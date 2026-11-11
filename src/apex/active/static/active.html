@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APEX Active</title>
+<script src="/static/lightweight-charts.js"></script>
+<style>
+  :root {
+    --bg: #07090d; --panel: #0d1118; --panel-2: #121823; --line: #1c2533;
+    --text: #d7e0ee; --muted: #6f7f97; --green: #2ee6a6; --red: #ff4d6d;
+    --pink: #ff3ea5; --amber: #ffb84d; --blue: #4da3ff;
+    --mono: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.45 var(--mono); }
+  body { padding: 14px; min-height: 100vh;
+    background: radial-gradient(1200px 500px at 80% -10%, rgba(255,62,165,.07), transparent 60%),
+                radial-gradient(900px 500px at 0% 0%, rgba(77,163,255,.06), transparent 60%), var(--bg); }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .logo { font-weight: 700; font-size: 18px; letter-spacing: 3px; color: var(--pink);
+    text-shadow: 0 0 14px rgba(255,62,165,.5); }
+  .badge { padding: 3px 9px; border: 1px solid var(--line); border-radius: 3px; font-size: 11px;
+    letter-spacing: 1px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .badge.paper { color: var(--amber); border-color: rgba(255,184,77,.5); }
+  .badge.ok { color: var(--green); border-color: rgba(46,230,166,.4); }
+  .badge.bad { color: var(--red); border-color: rgba(255,77,109,.5); }
+  .spacer { flex: 1; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; min-width: 0; }
+  .kpi .label { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; }
+  .kpi .value { font-size: 20px; font-weight: 700; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+    display: flex; flex-direction: column; min-width: 0; margin-bottom: 10px; }
+  .panel h2 { margin: 0; padding: 8px 12px; font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  .panel h2 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--pink); box-shadow: 0 0 8px var(--pink); }
+  .scroll { overflow: auto; max-height: 420px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-weight: 400; font-size: 10px; letter-spacing: 1px;
+    text-transform: uppercase; padding: 6px 10px; position: sticky; top: 0; background: var(--panel); }
+  td { padding: 6px 10px; border-top: 1px solid rgba(28,37,51,.6); white-space: nowrap; }
+  td.wrap { white-space: normal; min-width: 220px; color: var(--muted); }
+  td.num, th.num { text-align: right; }
+  .up { color: var(--green); } .down { color: var(--red); } .muted { color: var(--muted); } .amber { color: var(--amber); }
+  .tag { font-size: 9px; letter-spacing: 1px; padding: 1px 5px; border-radius: 2px; text-transform: uppercase; }
+  .tag.spike { background: rgba(46,230,166,.15); color: var(--green); }
+  .tag.drop { background: rgba(255,77,109,.15); color: var(--red); }
+  .tag.bounce { background: rgba(77,163,255,.15); color: var(--blue); }
+  .empty { padding: 18px 12px; color: var(--muted); }
+  #chart { height: 220px; }
+  a { color: var(--text); text-decoration: none; } a:hover { color: var(--pink); }
+  .note { color: var(--muted); font-size: 11px; padding: 0 2px 10px; }
+  @media (max-width: 1000px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">APEX ACTIVE</div>
+  <span class="badge paper">Fake money</span>
+  <span class="badge" id="mkt">Market</span>
+  <span class="badge" id="halt" hidden></span>
+  <div class="spacer"></div>
+  <span class="muted" id="updated">loading…</span>
+</header>
+<div class="kpis">
+  <div class="kpi"><div class="label">Equity</div><div class="value" id="k-eq">–</div><div class="sub" id="k-eq-sub"></div></div>
+  <div class="kpi"><div class="label">Total P&amp;L</div><div class="value" id="k-pnl">–</div><div class="sub">after fees, before tax</div></div>
+  <div class="kpi"><div class="label">Today</div><div class="value" id="k-today">–</div><div class="sub" id="k-today-sub"></div></div>
+  <div class="kpi"><div class="label">Trades</div><div class="value" id="k-trades">–</div><div class="sub" id="k-win"></div></div>
+  <div class="kpi"><div class="label">Open</div><div class="value" id="k-open">–</div><div class="sub" id="k-open-sub"></div></div>
+  <div class="kpi"><div class="label">Feeds</div><div class="value" id="k-feeds">–</div><div class="sub" id="k-feeds-sub"></div></div>
+</div>
+<div class="note" id="note"></div>
+<div class="grid">
+  <div>
+    <div class="panel"><h2><span class="dot"></span>Sudden moves and what the bot did</h2>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Move</th><th class="num">5-min</th><th class="num">Volume</th><th class="num">News</th><th>Decision</th><th>Headline</th></tr></thead><tbody id="events"></tbody></table></div></div>
+    <div class="panel"><h2>Trades</h2>
+      <div class="scroll"><table><thead><tr><th>Exit</th><th>Stock</th><th>Rule</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th>Why</th></tr></thead><tbody id="trades"></tbody></table></div></div>
+  </div>
+  <div>
+    <div class="panel"><h2>Equity</h2><div id="chart"></div></div>
+    <div class="panel"><h2>Open positions</h2>
+      <div class="scroll"><table><thead><tr><th>Stock</th><th>Rule</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div></div>
+    <div class="panel"><h2>Latest headlines</h2>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Stocks</th><th class="num">Tone</th><th>Headline</th></tr></thead><tbody id="news"></tbody></table></div></div>
+  </div>
+</div>
+<script>
+const inr = v => (v < 0 ? "-" : "") + "₹" + Math.abs(v).toLocaleString("en-IN", {maximumFractionDigits: 0});
+const cls = v => v > 0 ? "up" : v < 0 ? "down" : "muted";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const tm = ms => ms ? new Date(ms).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) : "–";
+const $ = id => document.getElementById(id);
+let chart, series;
+function rows(id, list, fn, empty) {
+  $(id).innerHTML = list.length ? list.map(fn).join("") : `<tr><td class="empty" colspan="9">${empty}</td></tr>`;
+}
+async function load() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); } catch { $("updated").textContent = "bot not reachable"; return; }
+  if (s.loading) { $("updated").textContent = "first download running, about a minute…"; return; }
+  $("updated").textContent = "updated " + tm(s.generated_ms);
+  $("mkt").textContent = s.market_open ? "NSE open" : "NSE closed";
+  $("mkt").className = "badge " + (s.market_open ? "ok" : "");
+  $("halt").hidden = !s.halted; $("halt").textContent = s.halted ? "Kill switch: " + s.halted : ""; $("halt").className = "badge bad";
+  $("k-eq").textContent = inr(s.equity); $("k-eq-sub").textContent = "started " + tm(s.start_ms) + " with " + inr(s.capital);
+  $("k-pnl").textContent = inr(s.pnl); $("k-pnl").className = "value " + cls(s.pnl);
+  const td = s.today || {};
+  $("k-today").textContent = inr(td.pnl || 0); $("k-today").className = "value " + cls(td.pnl || 0);
+  $("k-today-sub").textContent = `${td.trades || 0} trades · stop for day at -${inr(s.rules.daily_loss_limit).slice(1)}`;
+  $("k-trades").textContent = s.stats.trades;
+  $("k-win").textContent = s.stats.trades ? `${Math.round(s.stats.win_rate * 100)}% winners` : "none yet";
+  $("k-open").textContent = `${s.positions.length} / ${s.rules.positions}`;
+  $("k-open-sub").textContent = inr(s.rules.per_trade) + " per trade";
+  const errs = Object.keys(s.feeds.errors || {});
+  $("k-feeds").textContent = errs.length ? `${errs.length} down` : "all up";
+  $("k-feeds").className = "value " + (errs.length ? "amber" : "up");
+  $("k-feeds-sub").textContent = errs.length ? errs.join(", ") : "prices, news, Reddit";
+  const failed = (s.feeds.data_failed || []).length;
+  $("note").textContent = (failed ? `${failed} stocks failed to download this cycle. ` : "") +
+    `Checks 50 NSE stocks every 5 minutes from 9:15 to 3:30. Last bar ${tm(s.latest_bar_ms)}. Positions always close the same day.`;
+  rows("events", s.events, e => `<tr><td>${tm(e.ts)}</td><td>${esc(e.symbol)}</td><td><span class="tag ${e.kind}">${e.kind}</span></td>
+    <td class="num ${cls(e.move_pct)}">${e.move_pct.toFixed(2)}%</td><td class="num">${e.volume_x}x</td>
+    <td class="num ${cls(e.news_tone)}">${e.news_count ? e.news_count + " · " + e.news_tone.toFixed(2) : "–"}</td>
+    <td class="${e.action === "bought" ? "up" : "muted"}">${esc(e.action)}</td><td class="wrap">${esc(e.headline)}</td></tr>`,
+    "No sudden moves yet. They show up here during market hours.");
+  rows("trades", s.trades, t => `<tr><td>${tm(t.exit_ts)}</td><td>${esc(t.symbol)}</td><td class="muted">${t.rule.replace("_", " ")}</td>
+    <td class="num">${t.entry.toFixed(2)}</td><td class="num">${t.exit.toFixed(2)}</td>
+    <td class="num ${cls(t.pnl)}">${inr(t.pnl)}</td><td class="muted">${t.reason}</td></tr>`, "No trades yet.");
+  rows("positions", s.positions, p => `<tr><td>${esc(p.symbol)}</td><td class="muted">${p.rule.replace("_", " ")}</td>
+    <td class="num">${p.entry.toFixed(2)}</td><td class="num down">${p.stop.toFixed(2)}</td><td class="num up">${p.target.toFixed(2)}</td>
+    <td class="num ${cls(p.unrealized)}">${inr(p.unrealized)}</td></tr>`, "Nothing open.");
+  rows("news", s.news, n => `<tr><td>${tm(n.published_ms || n.fetched_ms)}</td><td>${esc(n.symbols || "–")}</td>
+    <td class="num ${cls(n.score)}">${n.score ? n.score.toFixed(2) : "–"}</td>
+    <td class="wrap"><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a> <span class="muted">${esc(n.source)}</span></td></tr>`,
+    errs.length ? "News feeds unreachable right now." : "No headlines yet.");
+  if (window.LightweightCharts) {
+    if (!chart) {
+      chart = LightweightCharts.createChart($("chart"), {layout: {background: {color: "transparent"}, textColor: "#6f7f97"},
+        grid: {vertLines: {color: "#121823"}, horzLines: {color: "#121823"}}, timeScale: {timeVisible: true}, rightPriceScale: {borderColor: "#1c2533"}});
+      series = chart.addAreaSeries ? chart.addAreaSeries({lineColor: "#ff3ea5", topColor: "rgba(255,62,165,.25)", bottomColor: "rgba(255,62,165,0)"}) : chart.addLineSeries({color: "#ff3ea5"});
+    }
+    const pts = []; let last = -1;
+    for (const p of s.equity_curve) { const t = Math.floor((p.ts + 19800000) / 1000); if (t > last) { pts.push({time: t, value: p.equity}); last = t; } }
+    if (pts.length) series.setData(pts);
+  }
+}
+load(); setInterval(load, 30000);
+</script>
+</body>
+</html>

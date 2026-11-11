@@ -36,6 +36,27 @@ so days or weeks with no trades are normal.
 
 To start over with a fresh account: `.venv\Scripts\python -m apex paper init`.
 
+## Active intraday bot (fake money, NSE stocks plus news)
+
+Double-click `run_active.bat` (run `run.bat` once first) and leave the window open from 9:15
+to 3:30. The page opens at http://127.0.0.1:8001. It runs separately from the daily bot.
+
+- Every 5 minutes it downloads 5-minute bars for the 50 NSE stocks and flags sudden moves:
+  3x the normal 5-minute move on 3x the usual volume for that time of day.
+- When a stock moves, it reads that stock's Google News headlines. It also reads Economic Times
+  and Moneycontrol market news and Reddit (r/IndianStreetBets, r/IndiaInvestments) every
+  10 minutes, then scores each headline as good or bad news.
+- It buys a spike only with positive news (`news_momentum`). It buys the first green bar after
+  a sharp drop unless the news is bad (`dip_bounce`).
+- Safety rules: at most 4 positions of INR 8,000 each, a stop on every trade, everything closed
+  by 15:25, a 30-minute cooldown per stock, a 1-hour pause after 3 stop-outs, a stop for the day
+  after INR 1,000 of losses, and a kill switch below INR 45,000.
+- The account is rebuilt every cycle from stored bars and headlines (`data/active.db`), so
+  restarts are safe. It only trades bars it saw live: no trades happen while the PC is off.
+
+This is a forward test. The 60-day price-only test found no edge (`docs/intraday-results.md`),
+and news can only be judged live.
+
 ## Commands
 
 ```powershell
