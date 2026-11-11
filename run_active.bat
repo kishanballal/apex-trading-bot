@@ -7,13 +7,9 @@ if not exist .venv\Scripts\python.exe (
   pause
   goto :eof
 )
-if not exist .venv\active1.flag (
-  .venv\Scripts\python.exe -m pip install -e . || goto :error
-  echo ok> .venv\active1.flag
-)
 echo Starting the active bot. The first start downloads 60 days of 5-minute data (about a minute).
 start "" http://127.0.0.1:8001
-.venv\Scripts\python.exe -m apex.active
+.venv\Scripts\python.exe -m apex.active || goto :error
 goto :eof
 :error
 echo.
