@@ -63,7 +63,12 @@ class ActiveStore:
 
     def add_news(self, items: list[Item], symbols: list[str], fetched_ms: int,
                  force_symbol: str | None = None) -> int:
-        """Store new headlines. Google News results for a stock also count for that stock."""
+        """Store new headlines, tagged with the stocks they actually name.
+
+        Google News searches return plenty of unrelated stories (the first live day tagged an
+        Nvidia CEO salary story to Eicher Motors), so a search result only counts for the
+        searched stock when its title names that stock. `force_symbol` is kept for callers
+        but no longer tags anything on its own."""
         added = 0
         with self.db:
             for it in items:
@@ -75,8 +80,6 @@ class ActiveStore:
                     continue
                 added += 1
                 matched = set(match_symbols(it.title, symbols))
-                if force_symbol:
-                    matched.add(force_symbol)
                 self.db.executemany("INSERT OR IGNORE INTO news_symbols VALUES (?, ?)",
                                     [(it.uid, s) for s in matched])
         return added

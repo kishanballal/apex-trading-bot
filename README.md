@@ -44,8 +44,9 @@ to 3:30. The page opens at http://127.0.0.1:8001. It runs separately from the da
 - Every 5 minutes it downloads 5-minute bars for the 50 NSE stocks and flags sudden moves:
   3x the normal 5-minute move on 3x the usual volume for that time of day.
 - When a stock moves, it reads that stock's Google News headlines. It also reads Economic Times
-  and Moneycontrol market news and Reddit (r/IndianStreetBets, r/IndiaInvestments) every
-  10 minutes, then scores each headline as good or bad news.
+  and Moneycontrol market news every 10 minutes, then scores each headline as good or bad news.
+  A headline only counts for a stock if it names that stock. Reddit is off because it blocks
+  clients that have no API key.
 - It buys a spike only with positive news (`news_momentum`). It buys the first green bar after
   a sharp drop unless the news is bad (`dip_bounce`).
 - Safety rules: at most 4 positions of INR 8,000 each, a stop on every trade, everything closed

@@ -93,3 +93,13 @@ def test_max_positions_and_kill_switch():
     assert sum("4 positions" in e["action"] for e in r.events) == 2
     halted = engine.replay(frames, EMPTY, DAY0, engine.ActiveConfig(equity_floor=60_000))
     assert halted.halted and halted.trades == []
+
+
+def test_search_results_only_tag_stocks_they_name(tmp_path):
+    from apex.active.store import ActiveStore
+    st = ActiveStore(tmp_path / "a.db")
+    items = [news.Item("1", "google-news", "Jensen Huang salary revealed", 0, ""),
+             news.Item("2", "google-news", "Eicher Motors shares jump on record sales", 0, "")]
+    st.add_news(items, ["EICHERMOT", "TATASTEEL"], 1, force_symbol="EICHERMOT")
+    tagged = st.news()
+    assert list(tagged.title) == ["Eicher Motors shares jump on record sales"]

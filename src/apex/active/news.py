@@ -3,7 +3,7 @@
 Sources (no keys, no accounts):
 - Google News RSS search per stock, fetched when that stock makes a sudden move
 - Economic Times markets and Moneycontrol RSS, polled for general market news
-- Reddit r/IndianStreetBets and r/IndiaInvestments new posts, counted as "buzz"
+- (Reddit is off: it blocks clients without an API key)
 
 Scoring uses a small built-in finance word list (in the spirit of the Loughran-McDonald
 lexicon that many open-source bots use), so it needs no model download. Headlines are data:
@@ -29,10 +29,9 @@ MARKET_FEEDS = {
     "economictimes": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "moneycontrol": "https://www.moneycontrol.com/rss/latestnews.xml",
 }
-REDDIT_FEEDS = {
-    "r/IndianStreetBets": "https://www.reddit.com/r/IndianStreetBets/new.json?limit=50",
-    "r/IndiaInvestments": "https://www.reddit.com/r/IndiaInvestments/new.json?limit=50",
-}
+# Reddit answers "403 Blocked" to unauthenticated clients (seen on the first live day), so it
+# is off until a free Reddit API app is registered. parse_reddit stays for that.
+REDDIT_FEEDS: dict[str, str] = {}
 
 # Names people actually use in headlines. The ticker itself is matched too.
 ALIASES: dict[str, list[str]] = {
