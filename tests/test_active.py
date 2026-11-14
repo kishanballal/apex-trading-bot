@@ -103,3 +103,17 @@ def test_search_results_only_tag_stocks_they_name(tmp_path):
     st.add_news(items, ["EICHERMOT", "TATASTEEL"], 1, force_symbol="EICHERMOT")
     tagged = st.news()
     assert list(tagged.title) == ["Eicher Motors shares jump on record sales"]
+
+
+def test_one_word_names_need_capitals_and_aliases_load(tmp_path):
+    p = tmp_path / "u.toml"
+    p.write_text('[active]\nextra_symbols = ["ETERNAL"]\n[aliases]\n"ETERNAL" = ["Eternal", "Zomato"]\n')
+    assert news.load_aliases(p) == ["ETERNAL"]
+    assert news.match_symbols("Zomato parent Eternal jumps", ["ETERNAL"]) == ["ETERNAL"]
+    assert news.match_symbols("an eternal question for markets", ["ETERNAL"]) == []
+
+
+def test_scorer_falls_back_to_word_list():
+    sc = news.Scorer(use_finbert=False)
+    assert sc.name == "word list"
+    assert sc(["Shares surge on record profit", "Plunge after fraud probe"]) == [1.0, -1.0]

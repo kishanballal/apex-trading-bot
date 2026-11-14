@@ -119,10 +119,10 @@ async function load() {
   const errs = Object.keys(s.feeds.errors || {});
   $("k-feeds").textContent = errs.length ? `${errs.length} down` : "all up";
   $("k-feeds").className = "value " + (errs.length ? "amber" : "up");
-  $("k-feeds-sub").textContent = errs.length ? errs.join(", ") : "prices, news, Reddit";
+  $("k-feeds-sub").textContent = errs.length ? errs.join(", ") : "prices and news";
   const failed = (s.feeds.data_failed || []).length;
   $("note").textContent = (failed ? `${failed} stocks failed to download this cycle. ` : "") +
-    `Checks 50 NSE stocks every 5 minutes from 9:15 to 3:30. Last bar ${tm(s.latest_bar_ms)}. Positions always close the same day.`;
+    `Checks ${s.watching || 50} NSE stocks every 5 minutes from 9:15 to 3:30. Headlines read by ${s.scorer || "word list"}. Last bar ${tm(s.latest_bar_ms)}. Positions always close the same day.`;
   rows("events", s.events, e => `<tr><td>${tm(e.ts)}</td><td>${esc(e.symbol)}</td><td><span class="tag ${e.kind}">${e.kind}</span></td>
     <td class="num ${cls(e.move_pct)}">${e.move_pct.toFixed(2)}%</td><td class="num">${e.volume_x}x</td>
     <td class="num ${cls(e.news_tone)}">${e.news_count ? e.news_count + " · " + e.news_tone.toFixed(2) : "–"}</td>

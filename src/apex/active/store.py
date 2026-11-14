@@ -62,7 +62,7 @@ class ActiveStore:
         return [r[0] for r in self.db.execute("SELECT DISTINCT symbol FROM bars")]
 
     def add_news(self, items: list[Item], symbols: list[str], fetched_ms: int,
-                 force_symbol: str | None = None) -> int:
+                 force_symbol: str | None = None, scorer=None) -> int:
         """Store new headlines, tagged with the stocks they actually name.
 
         Google News searches return plenty of unrelated stories (the first live day tagged an
@@ -70,12 +70,16 @@ class ActiveStore:
         searched stock when its title names that stock. `force_symbol` is kept for callers
         but no longer tags anything on its own."""
         added = 0
+        known = {r[0] for r in self.db.execute(
+            "SELECT uid FROM news WHERE uid IN (%s)" % ",".join("?" * len(items)),
+            [it.uid for it in items])} if items else set()
+        items = [it for it in items if it.uid not in known]
+        tones = scorer([it.title for it in items]) if scorer else [score(it.title) for it in items]
         with self.db:
-            for it in items:
+            for it, tone in zip(items, tones):
                 cur = self.db.execute(
                     "INSERT OR IGNORE INTO news VALUES (?,?,?,?,?,?,?)",
-                    (it.uid, it.source, it.title, it.published_ms, fetched_ms, it.url,
-                     score(it.title)))
+                    (it.uid, it.source, it.title, it.published_ms, fetched_ms, it.url, tone))
                 if cur.rowcount == 0:
                     continue
                 added += 1

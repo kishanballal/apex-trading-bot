@@ -7,6 +7,11 @@ if not exist .venv\Scripts\python.exe (
   pause
   goto :eof
 )
+if not exist .venv\finbert1.flag (
+  echo One-time setup: installing the FinBERT headline reader. If this fails the bot still runs.
+  .venv\Scripts\python.exe -m pip install transformers
+  echo ok> .venv\finbert1.flag
+)
 echo Starting the active bot. The first start downloads 60 days of 5-minute data (about a minute).
 start "" http://127.0.0.1:8001
 .venv\Scripts\python.exe -m apex.active || goto :error

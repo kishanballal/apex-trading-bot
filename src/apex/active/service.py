@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from apex.active import engine
-from apex.active.news import NewsClient, now_ms
+from apex.active.news import NewsClient, Scorer, load_aliases, now_ms
 from apex.active.store import ActiveStore
 from apex.intraday import nse
 
@@ -76,7 +76,10 @@ class ActiveBot:
         self.store = ActiveStore(root / "active.db")
         self.state_path = root / "active_state.json"
         universe = tomllib.loads(Path("config/universe.toml").read_text())
-        self.symbols: list[str] = universe["equity"]["symbols"]
+        extra = load_aliases(Path("config/active_universe.toml"))
+        self.symbols: list[str] = list(dict.fromkeys([*universe["equity"]["symbols"], *extra]))
+        self.scorer = Scorer()
+        log.info("watching %d stocks; headline reader: %s", len(self.symbols), self.scorer.name)
         self.http = httpx.Client(timeout=30, headers={"User-Agent": nse.UA})
         self.news = NewsClient()
         self.state: dict = {}
@@ -99,7 +102,7 @@ class ActiveBot:
                 failed.append(s)
                 continue
             new += self.store.upsert_bars(s, df, seen)
-            time.sleep(0.4)
+            time.sleep(0.25)
         self.data_errors = failed
         return new
 
@@ -108,14 +111,15 @@ class ActiveBot:
         added = 0
         gap = 10 * 60_000 if market_open(t) else 30 * 60_000
         if t - self.last_market_news >= gap:
-            added += self.store.add_news(self.news.market(), self.symbols, t)
+            added += self.store.add_news(self.news.market(), self.symbols, t,
+                                         scorer=self.scorer)
             self.last_market_news = t
         for s in movers[:8]:
             if t - self.news_checked.get(s, 0) < 30 * 60_000:
                 continue
             self.news_checked[s] = t
             added += self.store.add_news(self.news.for_symbol(s), self.symbols, t,
-                                         force_symbol=s)
+                                         force_symbol=s, scorer=self.scorer)
             time.sleep(0.5)
         return added
 
@@ -178,6 +182,7 @@ class ActiveBot:
             "news": self.store.latest_news(40),
             "feeds": {"errors": self.news.errors, "data_failed": self.data_errors},
             "cycle": {"new_bars": new_bars, "new_headlines": new_news, "seconds": round(secs, 1)},
+            "watching": len(self.symbols), "scorer": self.scorer.name,
             "rules": {"positions": self.cfg.max_positions, "per_trade": self.cfg.notional,
                       "daily_loss_limit": self.cfg.daily_loss_limit,
                       "floor": self.cfg.equity_floor},

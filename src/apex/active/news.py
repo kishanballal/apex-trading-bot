@@ -74,6 +74,54 @@ _POS, _NEG = set(POSITIVE), set(NEGATIVE)
 _WORD = re.compile(r"[a-z][a-z\-']+")
 
 
+def load_aliases(path) -> list[str]:
+    """Merge extra stocks and their names from config/active_universe.toml, if present."""
+    import tomllib
+    from pathlib import Path
+    p = Path(path)
+    if not p.exists():
+        return []
+    cfg = tomllib.loads(p.read_text(encoding="utf-8"))
+    for sym, names in (cfg.get("aliases") or {}).items():
+        ALIASES.setdefault(sym, [])
+        ALIASES[sym] = list(dict.fromkeys([*ALIASES[sym], *names]))
+    return list((cfg.get("active") or {}).get("extra_symbols") or [])
+
+
+class Scorer:
+    """Headline tone in [-1, 1]. Uses FinBERT (a free model trained on financial news) when
+    the `transformers` package is installed, on the GPU if there is one; otherwise the word
+    list below. `name` says which one is active."""
+
+    def __init__(self, use_finbert: bool = True) -> None:
+        self.name = "word list"
+        self._clf = None
+        if use_finbert:
+            try:
+                import torch
+                from transformers import pipeline
+                self._clf = pipeline("text-classification", model="ProsusAI/finbert",
+                                     top_k=None, device=0 if torch.cuda.is_available() else -1)
+                self.name = "FinBERT" + (" (GPU)" if torch.cuda.is_available() else " (CPU)")
+            except Exception as exc:  # missing package, blocked DLL, no download: fall back
+                self.error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                self._clf = None
+
+    def __call__(self, titles: list[str]) -> list[float]:
+        if not titles:
+            return []
+        if self._clf is not None:
+            try:
+                out = []
+                for res in self._clf(titles, truncation=True, batch_size=32):
+                    d = {r["label"].lower(): r["score"] for r in res}
+                    out.append(round(d.get("positive", 0.0) - d.get("negative", 0.0), 3))
+                return out
+            except Exception:
+                pass
+        return [score(t) for t in titles]
+
+
 def score(text: str) -> float:
     """Tone from -1 (all negative words) to +1 (all positive). 0 when no finance words."""
     words = _WORD.findall(text.lower())
@@ -89,9 +137,11 @@ def match_symbols(text: str, symbols: list[str]) -> list[str]:
                    key=lambda x: -len(x[0]))
     found: list[str] = []
     for name, sym in names:
-        # Whole-word match. All-caps names (tickers, "SBI") must match in capitals.
-        pat = re.compile(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])",
-                         0 if name.isupper() else re.IGNORECASE)
+        # Whole-word match. Tickers and one-word names ("SBI", "Eternal", "Trent") must match
+        # with their capitals, so ordinary words in a headline are not mistaken for a stock.
+        one_word = " " not in name.strip()
+        pat = re.compile(r"(?<![A-Za-z])" + re.escape(name.strip()) + r"(?![A-Za-z])",
+                         0 if one_word or name.isupper() else re.IGNORECASE)
         if pat.search(text):
             if sym not in found:
                 found.append(sym)
