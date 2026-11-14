@@ -58,6 +58,20 @@ class ActiveStore:
             "SELECT ts, open, high, low, close, volume, first_seen FROM bars WHERE symbol=? "
             "ORDER BY ts", self.db, params=(symbol,))
 
+    def bars_between(self, lo_ms: int, hi_ms: int) -> pd.DataFrame:
+        """All stocks' bars with lo <= ts < hi, sorted by symbol then time."""
+        return pd.read_sql_query(
+            "SELECT symbol, ts, open, high, low, close, volume, first_seen FROM bars "
+            "WHERE ts >= ? AND ts < ? ORDER BY symbol, ts", self.db, params=(lo_ms, hi_ms))
+
+    def session_days(self) -> list[int]:
+        """IST day numbers that have bars, oldest first."""
+        cur = self.db.execute("SELECT DISTINCT (ts + 19800000) / 86400000 FROM bars ORDER BY 1")
+        return [int(r[0]) for r in cur]
+
+    def latest_ts(self) -> int:
+        return int(self.db.execute("SELECT COALESCE(MAX(ts), 0) FROM bars").fetchone()[0])
+
     def symbols(self) -> list[str]:
         return [r[0] for r in self.db.execute("SELECT DISTINCT symbol FROM bars")]
 

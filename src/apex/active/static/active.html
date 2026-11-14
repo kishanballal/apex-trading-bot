@@ -77,7 +77,7 @@
 <div class="grid">
   <div>
     <div class="panel"><h2><span class="dot"></span>Sudden moves and what the bot did</h2>
-      <div class="scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Move</th><th class="num">5-min</th><th class="num">Volume</th><th class="num">News</th><th>Decision</th><th>Headline</th></tr></thead><tbody id="events"></tbody></table></div></div>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Stock</th><th>Move</th><th class="num">Last 5 min</th><th class="num">Volume</th><th class="num">News</th><th>Decision</th><th>Headline</th></tr></thead><tbody id="events"></tbody></table></div></div>
     <div class="panel"><h2>Trades</h2>
       <div class="scroll"><table><thead><tr><th>Exit</th><th>Stock</th><th>Rule</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th>Why</th></tr></thead><tbody id="trades"></tbody></table></div></div>
   </div>
@@ -122,7 +122,7 @@ async function load() {
   $("k-feeds-sub").textContent = errs.length ? errs.join(", ") : "prices and news";
   const failed = (s.feeds.data_failed || []).length;
   $("note").textContent = (failed ? `${failed} stocks failed to download this cycle. ` : "") +
-    `Checks ${s.watching || 50} NSE stocks every 5 minutes from 9:15 to 3:30. Headlines read by ${s.scorer || "word list"}. Last bar ${tm(s.latest_bar_ms)}. Positions always close the same day.`;
+    `Checks ${s.watching || 50} NSE stocks every minute from 9:15 to 3:30. Headlines read by ${s.scorer || "word list"}. Last bar ${tm(s.latest_bar_ms)}. Positions always close the same day.`;
   rows("events", s.events, e => `<tr><td>${tm(e.ts)}</td><td>${esc(e.symbol)}</td><td><span class="tag ${e.kind}">${e.kind}</span></td>
     <td class="num ${cls(e.move_pct)}">${e.move_pct.toFixed(2)}%</td><td class="num">${e.volume_x}x</td>
     <td class="num ${cls(e.news_tone)}">${e.news_count ? e.news_count + " · " + e.news_tone.toFixed(2) : "–"}</td>

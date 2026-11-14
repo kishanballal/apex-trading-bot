@@ -109,3 +109,26 @@ The trade tests, with fees and before tax:
 
 Out of the box, Kronos predicts 5-minute NSE moves no better than a coin flip. It slightly
 improves the dip-bounce picks before fees, but not by enough to cover them. Not adopted.
+
+# Active bot v2: 1-minute detection (2026-11-14)
+
+The live bot now reads 1-minute candles (`src/apex/active/bars1m.py`) and treats the last five
+minutes as one move, so a sudden move is seen within a minute instead of at the next 5-minute
+close. Measured on the owner's PC: Yahoo's finished bars were available 25 seconds after the
+close, and 179 stocks download in about 3 seconds.
+
+The replay is also stricter than v1. A buy fills at the first bar that opens after the bot
+saw the signal. v1 filled at the open of the next 5-minute bar, a price from before the bot
+could have known.
+
+Dip-bounce on 4 weeks of Yahoo 1-minute history (179 stocks, 14 tradable sessions, no news
+available for the past, signal seen 15 seconds after the minute closes):
+
+| Version | Trades | Win rate | Profit factor | Net |
+|---|---|---|---|---|
+| With all safety limits | 65 | 46% | 0.96 | -100 |
+| Every signal, no limits | 78 | 44% | 0.78 | -722 |
+| Every signal, zero costs | 78 | 47% | 1.07 | +189 |
+
+Same story as before: a small edge before costs (+0.03% per trade) that fees of about 0.15%
+per round trip more than eat. The rule parameters were set once and not tuned on this data.

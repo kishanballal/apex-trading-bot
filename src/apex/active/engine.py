@@ -1,9 +1,9 @@
-"""Active fake-money account: a deterministic replay over stored 5-minute bars and news.
+"""Active fake-money account: a deterministic replay over stored 1-minute bars and news.
 
 Every cycle rebuilds the whole account from the stored bars and headlines, the same way the
 daily paper bot does. That makes it restart-safe, and a crash or a PC restart never loses or
-duplicates a trade. Trades only happen on bars the bot saw live (within 10 minutes of the
-bar closing), so when the PC is off nothing is traded, as in real life.
+duplicates a trade. Trades only happen on bars the bot saw live (within a few minutes of the
+bar closing), and a buy fills at the first price AFTER the bot saw the signal, so when the PC is off nothing is traded, as in real life.
 
 Two entry rules, both buying (long only, no leverage, every position closed the same day):
 - news_momentum: a sudden 5-minute jump (3x normal size, 3x normal volume) above VWAP, in a
@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 import pandas as pd
 
-from apex.intraday.nse import BAR_MS, IST_OFFSET_MS
+from apex.intraday.nse import IST_OFFSET_MS
 
 MIN = 60_000
 
@@ -52,7 +52,8 @@ class ActiveConfig:
     stoploss_pause_ms: int = 60 * MIN
     daily_loss_limit: float = 1_000.0
     equity_floor: float = 45_000.0
-    max_hold_bars: int = 24          # 2 hours
+    max_hold_ms: int = 120 * MIN
+    max_fill_wait_ms: int = 5 * MIN   # give up on an entry if no price arrives in time
     target_atr: float = 3.0
 
 
@@ -68,7 +69,6 @@ class Position:
     qty: float
     stop: float
     target: float
-    bars: int = 0
     news: str = ""
 
 
@@ -102,24 +102,38 @@ def news_context(news: pd.DataFrame, symbol: str, t_close: int, cfg: ActiveConfi
 
 def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
            cfg: ActiveConfig = ActiveConfig()) -> Result:
-    """frames: symbol -> nse.build() output with a `first_seen` column (ms, NaN if never)."""
+    """frames: symbol -> a prepare()d frame. Only the minutes that matter are visited
+    (signals, pending orders, open positions), so a month of 1-minute bars replays quickly.
+
+    Timing is honest about what the bot could know: a signal on a bar is acted on at the
+    moment the bot first saw that bar (`first_seen`), and the buy fills at the OPEN of the
+    first bar that starts after that moment.
+    """
     res = Result(cash=cfg.capital)
-    rows = []
+    A: dict[str, dict[str, np.ndarray]] = {}
+    signals: dict[int, list[tuple[str, int]]] = {}
+    all_ts: set[int] = set()
+    cols = ["ts", "open", "high", "low", "close", "z_move", "vol_burst", "move", "r1",
+            "vwap_dist", "atr", "minute_of_day", "first_seen", "bar_ms"]
+    flags = ["sig_spike", "sig_drop", "sig_bounce", "is_last_"]
     for s, f in frames.items():
-        sel = f[f.ts >= start_ms]
-        if sel.empty:
+        if f.empty:
             continue
-        x = sel.assign(sym_=s, next_open_=f.open.shift(-1).loc[sel.index],
-                       next_ts_=f.ts.shift(-1).loc[sel.index],
-                       prev_z_=f.z_move.shift().loc[sel.index],
-                       prev_vb_=f.vol_burst.shift().loc[sel.index])
-        rows.append(x)
-    if not rows:
+        a = {c: f[c].to_numpy(float) for c in cols if c != "ts"}
+        a["ts"] = f.ts.to_numpy(np.int64)
+        for c in flags:
+            a[c] = f[c].to_numpy(bool)
+        A[s] = a
+        live = a["ts"] >= start_ms
+        all_ts.update(a["ts"][live].tolist())
+        for i in np.flatnonzero(live & (a["sig_spike"] | a["sig_drop"] | a["sig_bounce"])):
+            signals.setdefault(int(a["ts"][i]), []).append((s, int(i)))
+    if not all_ts:
         res.equity_now = cfg.capital
         return res
-    p = pd.concat(rows, ignore_index=True).sort_values(["ts", "sym_"], kind="stable")
+
     open_pos: dict[str, Position] = {}
-    pending: dict[str, dict] = {}   # symbol -> entry decided on the previous bar
+    pending: dict[str, dict] = {}   # symbol -> entry waiting for the next bar to open
     last_close: dict[str, float] = {}
     cooldown_until: dict[str, int] = {}
     day_stats: dict[int, dict] = {}
@@ -127,6 +141,11 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
 
     def day_of(ts: int) -> int:
         return (ts + IST_OFFSET_MS) // 86_400_000
+
+    def row(s: str, ts: int) -> int | None:
+        t = A[s]["ts"]
+        i = int(np.searchsorted(t, ts))
+        return i if i < len(t) and t[i] == ts else None
 
     def mark() -> float:
         return res.cash + sum(pp.qty * last_close.get(pp.symbol, pp.entry)
@@ -153,68 +172,76 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                            "news": pos.news})
         del open_pos[pos.symbol]
 
-    for ts, bars in p.groupby("ts", sort=True):
-        ts = int(ts)
+    for ts in sorted(all_ts):
         day = day_of(ts)
         d = day_stats.setdefault(day, {"pnl": 0.0, "stops": 0, "pause_until": 0, "trades": 0})
-        for r in bars.itertuples(index=False):
-            s = r.sym_
-            # 1) fill an entry decided on the previous bar, at this bar's open
-            order = pending.pop(s, None)
-            if order is not None and order["fill_ts"] == ts and s not in open_pos:
-                why_not = ""
-                if halted:
-                    why_not = "kill switch"
-                elif len(open_pos) >= cfg.max_positions:
-                    why_not = "4 positions already open"
-                elif d["pnl"] <= -cfg.daily_loss_limit:
-                    why_not = "daily loss limit hit"
-                elif ts < d["pause_until"]:
-                    why_not = "paused after 3 stop-outs"
-                elif ts < cooldown_until.get(s, 0):
-                    why_not = "cooldown after last trade"
-                spend = min(cfg.notional, res.cash)
-                if not why_not and spend < cfg.notional * 0.5:
-                    why_not = "not enough cash"
-                order["event"]["action"] = "skipped: " + why_not if why_not else "bought"
-                if not why_not:
-                    price = r.open * (1 + cfg.slippage)
-                    qty = spend / (price * (1 + cfg.fee))
-                    res.cash -= qty * price * (1 + cfg.fee)
-                    open_pos[s] = Position(
-                        s, order["rule"], ts, price, qty,
-                        stop=r.open - RULE_STOPS[order["rule"]] * order["atr"],
-                        target=r.open + cfg.target_atr * order["atr"], news=order["news"])
-            # 2) exits, checked on every bar a position is open (stop first, pessimistic)
-            pos = open_pos.get(s)
-            if pos is not None:
-                pos.bars += 1
-                first = pos.entry_ts == ts
-                if r.low <= pos.stop:
-                    close(pos, ts, pos.stop if first else min(r.open, pos.stop), "stop")
-                elif r.high >= pos.target:
-                    close(pos, ts, pos.target if first else max(r.open, pos.target), "target")
-                elif pos.bars >= cfg.max_hold_bars:
-                    close(pos, ts, r.close, "time")
-            last_close[s] = r.close
-            # 3) signals on this bar's close
-            if not np.isfinite(r.z_move) or not np.isfinite(r.vol_burst):
+        # 1) fill entries whose decision time has passed, at this bar's open
+        for s in sorted(pending):
+            order = pending[s]
+            i = row(s, ts)
+            if ts < order["fill_after"] or (i is None and ts <= order["expires"]):
                 continue
-            spike = r.z_move >= cfg.move_z and r.vol_burst >= cfg.move_volume
-            drop = r.z_move <= -cfg.move_z and r.vol_burst >= cfg.move_volume
-            bounce = (np.isfinite(r.prev_z_) and r.prev_z_ <= -cfg.move_z
-                      and r.prev_vb_ >= cfg.move_volume and r.r1 > 0 and r.rsi14 < 40)
-            if not (spike or drop or bounce):
+            del pending[s]
+            why_not = ""
+            if i is None or ts > order["expires"] or day_of(ts) != order["day"]:
+                why_not = "no fresh price in time"
+            elif halted:
+                why_not = "kill switch"
+            elif s in open_pos:
+                why_not = "already holding"
+            elif len(open_pos) >= cfg.max_positions:
+                why_not = f"{cfg.max_positions} positions already open"
+            elif d["pnl"] <= -cfg.daily_loss_limit:
+                why_not = "daily loss limit hit"
+            elif ts < d["pause_until"]:
+                why_not = "paused after 3 stop-outs"
+            elif ts < cooldown_until.get(s, 0):
+                why_not = "cooldown after last trade"
+            spend = min(cfg.notional, res.cash)
+            if not why_not and spend < cfg.notional * 0.5:
+                why_not = "not enough cash"
+            order["event"]["action"] = "skipped: " + why_not if why_not else "bought"
+            if not why_not:
+                o = float(A[s]["open"][i])
+                price = o * (1 + cfg.slippage)
+                qty = spend / (price * (1 + cfg.fee))
+                res.cash -= qty * price * (1 + cfg.fee)
+                open_pos[s] = Position(
+                    s, order["rule"], ts, price, qty,
+                    stop=o - RULE_STOPS[order["rule"]] * order["atr"],
+                    target=o + cfg.target_atr * order["atr"], news=order["news"])
+        # 2) exits on every bar a position is open (stop checked first, pessimistic)
+        for s in sorted(open_pos):
+            i = row(s, ts)
+            if i is None:
                 continue
-            t_close = ts + BAR_MS
+            a, pos = A[s], open_pos[s]
+            o, h, lo, c = (float(a[k][i]) for k in ("open", "high", "low", "close"))
+            last_close[s] = c
+            first = pos.entry_ts == ts
+            if lo <= pos.stop:
+                close(pos, ts, pos.stop if first else min(o, pos.stop), "stop")
+            elif h >= pos.target:
+                close(pos, ts, pos.target if first else max(o, pos.target), "target")
+            elif ts - pos.entry_ts >= cfg.max_hold_ms:
+                close(pos, ts, c, "time")
+            elif a["is_last_"][i]:
+                close(pos, ts, c, "session end")
+        # 3) signals on this bar's close
+        for s, i in signals.get(ts, ()):
+            a = A[s]
+            spike, bounce = bool(a["sig_spike"][i]), bool(a["sig_bounce"][i])
+            bar_ms = int(a["bar_ms"][i])
+            t_close = ts + bar_ms
             ctx = news_context(news, s, t_close, cfg)
-            kind = "spike" if spike else "drop" if drop else "bounce"
-            ev = {"ts": t_close, "symbol": s, "kind": kind, "move_pct": round(r.r1 * 100, 2),
-                  "volume_x": round(float(r.vol_burst), 1), "news_count": ctx["count"],
+            kind = "spike" if spike else "bounce" if bounce else "drop"
+            ev = {"ts": t_close, "symbol": s, "kind": kind,
+                  "move_pct": round(float(a["move"][i]) * 100, 2),
+                  "volume_x": round(float(a["vol_burst"][i]), 1), "news_count": ctx["count"],
                   "news_tone": ctx["tone"], "headline": ctx["top"], "action": "watch only"}
             res.events.append(ev)
             rule = None
-            if spike and r.vwap_dist > 0:
+            if spike and a["vwap_dist"][i] > 0:
                 if ctx["tone"] >= cfg.news_positive:
                     rule = "news_momentum"
                 else:
@@ -226,29 +253,23 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                     rule = "dip_bounce"
             if rule is None:
                 continue
-            live = np.isfinite(r.first_seen) and r.first_seen <= t_close + cfg.live_grace_ms
-            in_window = cfg.first_entry_minute <= r.minute_of_day <= cfg.last_entry_minute
-            same_day = np.isfinite(r.next_ts_) and day_of(int(r.next_ts_)) == day
+            seen = a["first_seen"][i]
+            live = np.isfinite(seen) and seen <= t_close + cfg.live_grace_ms
+            minute = a["minute_of_day"][i]
             if not live:
                 ev["action"] = "bot was not running"
-            elif not in_window:
+            elif not cfg.first_entry_minute <= minute <= cfg.last_entry_minute:
                 ev["action"] = "outside 09:30-14:45 entry window"
-            elif s in open_pos:
+            elif s in open_pos or s in pending:
                 ev["action"] = "already holding"
-            elif not np.isfinite(r.atr) or r.atr <= 0:
+            elif not np.isfinite(a["atr"][i]) or a["atr"][i] <= 0:
                 ev["action"] = "no volatility estimate"
-            elif not np.isfinite(r.next_ts_):
-                ev["action"] = "buy at next bar"   # filled on the next cycle
-                pending[s] = {"fill_ts": int(ts + BAR_MS), "rule": rule, "atr": float(r.atr),
+            else:
+                decided = max(t_close, int(seen))
+                ev["action"] = "buying at the next price"
+                pending[s] = {"fill_after": decided, "expires": decided + cfg.max_fill_wait_ms,
+                              "day": day, "rule": rule, "atr": float(a["atr"][i]),
                               "news": ctx["top"], "event": ev}
-            elif same_day:
-                pending[s] = {"fill_ts": int(r.next_ts_), "rule": rule, "atr": float(r.atr),
-                              "news": ctx["top"], "event": ev}
-        # session end: close anything open on its stock's last bar of the day
-        for r in bars.itertuples(index=False):
-            pos = open_pos.get(r.sym_)
-            if pos is not None and r.is_last_:
-                close(pos, ts, r.close, "session end")
         eq = mark()
         if not halted and eq < cfg.equity_floor:
             halted = f"equity {eq:,.0f} fell below the {cfg.equity_floor:,.0f} floor"
@@ -268,15 +289,28 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
     return res
 
 
-def prepare(f: pd.DataFrame, first_seen: pd.Series | None) -> pd.DataFrame:
-    """Add the replay's helper columns to an nse.build() frame."""
+def prepare(f: pd.DataFrame, first_seen: pd.Series | None, bar_ms: int = 300_000,
+            cfg: ActiveConfig = ActiveConfig()) -> pd.DataFrame:
+    """Add the replay's helper columns. Works for 5-minute frames (nse.build, where the
+    signal flags are derived here) and 1-minute frames (bars1m.build, which sets them)."""
     out = f.copy()
     out["first_seen"] = (out.ts.map(first_seen) if first_seen is not None
                          else np.nan).astype(float)
-    # The session's final bar: the 15:25 candle, or the last bar before a new day starts.
-    # (Today's latest bar is not "last" until the session is over.)
+    out["bar_ms"] = bar_ms
+    if "move" not in out:
+        out["move"] = out.r1
+    if "sig_spike" not in out:
+        ok = out.z_move.notna() & out.vol_burst.notna()
+        burst = out.vol_burst >= cfg.move_volume
+        out["sig_spike"] = ok & (out.z_move >= cfg.move_z) & burst
+        out["sig_drop"] = ok & (out.z_move <= -cfg.move_z) & burst
+        out["sig_bounce"] = (ok & out.sig_drop.shift(fill_value=False) & (out.r1 > 0)
+                             & (out.rsi14 < 40))
+    # The session's final bar: the last candle before 15:30, or the last bar before a new
+    # day starts. (Today's latest bar is not "last" until the session is over.)
     nxt_day = ((out.ts.shift(-1) + IST_OFFSET_MS) // 86_400_000)
     day = (out.ts + IST_OFFSET_MS) // 86_400_000
-    out["is_last_"] = ((out.minute_of_day >= 370) | (nxt_day.notna() & (nxt_day != day))
-                       ).to_numpy()
+    final_minute = 375 - bar_ms // MIN
+    out["is_last_"] = ((out.minute_of_day >= final_minute)
+                       | (nxt_day.notna() & (nxt_day != day))).to_numpy()
     return out

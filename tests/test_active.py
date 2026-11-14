@@ -39,9 +39,8 @@ def _frame(kind: str, n: int = 30, live: bool = True) -> pd.DataFrame:
     else:  # sharp drop then a green bar
         f.loc[10, ["z_move", "vol_burst", "r1"]] = [-4, 5, -0.01]
         f.loc[11, ["r1", "rsi14"]] = [0.002, 30]
-    f["first_seen"] = (ts + BAR_MS + 60_000) if live else np.nan
-    f["is_last_"] = np.arange(n) == n - 1
-    return f
+    f["first_seen"] = (ts + BAR_MS) if live else np.nan   # seen the moment the bar closed
+    return engine.prepare(f, f.set_index("ts").first_seen)
 
 
 def _news(symbol, tone, t):
@@ -80,7 +79,8 @@ def test_news_fetched_after_the_bar_is_not_used():
 
 def test_everything_closes_by_session_end_and_fees_are_charged():
     f = _frame("drop", n=20)
-    r = engine.replay({"A": f}, EMPTY, DAY0, engine.ActiveConfig(max_hold_bars=100))
+    f.loc[len(f) - 1, "is_last_"] = True   # treat bar 20 as the session's final bar
+    r = engine.replay({"A": f}, EMPTY, DAY0, engine.ActiveConfig(max_hold_ms=10**9))
     assert r.positions == [] and r.trades[0]["reason"] == "session end"
     assert r.trades[0]["pnl"] < 0  # flat prices: fees and slippage only
     assert r.equity_now == r.cash < 50_000
@@ -88,7 +88,7 @@ def test_everything_closes_by_session_end_and_fees_are_charged():
 
 def test_max_positions_and_kill_switch():
     frames = {s: _frame("drop") for s in "ABCDEF"}
-    r = engine.replay(frames, EMPTY, DAY0, engine.ActiveConfig(max_hold_bars=100))
+    r = engine.replay(frames, EMPTY, DAY0, engine.ActiveConfig(max_hold_ms=10**9))
     assert len(r.trades) == 4
     assert sum("4 positions" in e["action"] for e in r.events) == 2
     halted = engine.replay(frames, EMPTY, DAY0, engine.ActiveConfig(equity_floor=60_000))
@@ -117,3 +117,39 @@ def test_scorer_falls_back_to_word_list():
     sc = news.Scorer(use_finbert=False)
     assert sc.name == "word list"
     assert sc(["Shares surge on record profit", "Plunge after fraud probe"]) == [1.0, -1.0]
+
+
+def _minute_bars(days=7, seed=5):
+    """Quiet 1-minute sessions (09:15-15:29 IST) for a builder test."""
+    rng = np.random.default_rng(seed)
+    ts = np.concatenate([DAY0 + d * 86_400_000 + 13_500_000 + np.arange(375) * 60_000
+                         for d in range(days)])
+    c = 100 * np.exp(np.cumsum(rng.normal(0, 0.0004, len(ts))))
+    return pd.DataFrame({"ts": ts, "open": c, "high": c * 1.0002, "low": c * 0.9998,
+                         "close": c, "volume": rng.uniform(900, 1100, len(ts))})
+
+
+def test_one_minute_builder_flags_a_sudden_jump_once_and_never_looks_ahead():
+    from apex.active import bars1m
+    df = _minute_bars()
+    i = 6 * 375 + 120                       # 11:15 on the last day
+    df.loc[i:, ["open", "high", "low", "close"]] *= 1.012   # a 1.2% jump in one minute
+    df.loc[i, "open"] /= 1.012
+    df.loc[i, "low"] = df.loc[i, "open"]
+    df.loc[i, "volume"] *= 30
+    f = bars1m.build(df)
+    assert f.sig_spike.sum() == 1 and bool(f.sig_spike.iloc[i])   # seen on the same minute
+    assert not f.sig_spike.iloc[:i].any() and not f.sig_drop.any()
+    cut = bars1m.build(df.iloc[:i + 1])
+    cols = ["z_move", "vol_burst", "move", "rsi14", "atr", "vwap_dist"]
+    pd.testing.assert_frame_equal(f[cols].iloc[:i + 1], cut[cols])
+
+
+def test_fill_waits_for_the_first_bar_after_the_bot_saw_the_signal():
+    f = _frame("drop")
+    seen = f.set_index("ts").first_seen + 6 * 60_000     # bot saw each bar 6 minutes late
+    f = engine.prepare(f.drop(columns=["first_seen"]), seen)
+    r = engine.replay({"A": f}, EMPTY, DAY0)
+    # Signal on bar 11 closes at bar 12's open, seen 6 minutes later (inside bar 13),
+    # so the honest fill is bar 14's open.
+    assert r.trades[0]["entry_ts"] == int(f.ts[14])
