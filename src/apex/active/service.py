@@ -265,7 +265,26 @@ class ActiveBot:
         return 5 * 60
 
 
-def serve(bot: ActiveBot, port: int) -> None:
+def port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket() as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def open_page_when_ready(port: int) -> None:
+    """Open the dashboard once the web server answers, so the browser never shows
+    "can't reach this page" while the bot is still starting."""
+    import webbrowser
+    for _ in range(120):
+        if port_in_use(port):
+            webbrowser.open(f"http://127.0.0.1:{port}")
+            return
+        time.sleep(0.5)
+
+
+def serve(holder: dict, port: int, state_path: Path) -> None:
+    """Web page. Starts at once; the bot itself (FinBERT, data) loads in the background."""
     import uvicorn
     from fastapi import FastAPI
     from fastapi.responses import FileResponse, JSONResponse
@@ -282,10 +301,14 @@ def serve(bot: ActiveBot, port: int) -> None:
 
     @api.get("/api/state")
     def state():
-        if bot.state:
+        bot = holder.get("bot")
+        if bot is not None and bot.state:
             return JSONResponse(json.loads(json.dumps(bot.state, default=float)))
-        if bot.state_path.exists():
-            return JSONResponse(json.loads(bot.state_path.read_text()))
+        if state_path.exists():
+            try:
+                return JSONResponse(json.loads(state_path.read_text()))
+            except ValueError:
+                pass
         return JSONResponse({"loading": True})
 
     uvicorn.run(api, host="127.0.0.1", port=port, log_level="warning")
@@ -295,16 +318,37 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m apex.active")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--port", type=int, default=8001)
+    ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    bot = ActiveBot()
     if args.once:
+        bot = ActiveBot()
         s = bot.cycle()
         print(json.dumps({k: s[k] for k in ("equity", "stats", "today", "halted", "cycle",
                                              "feeds")}, indent=1, default=float))
         print(f"{len(s['events'])} recent sudden moves, {len(s['news'])} recent headlines")
         return
-    threading.Thread(target=bot.run_forever, daemon=True).start()
-    print(f"APEX active bot running. Open http://127.0.0.1:{args.port}  (Ctrl+C to stop)")
-    serve(bot, args.port)
+    url = f"http://127.0.0.1:{args.port}"
+    if port_in_use(args.port):
+        # Double-clicking run_active.bat again while the bot runs used to crash here.
+        print(f"The active bot is already running. Opening {url}")
+        if not args.no_browser:
+            import webbrowser
+            webbrowser.open(url)
+        return
+    holder: dict = {}
+
+    def start_bot() -> None:
+        holder["bot"] = ActiveBot()
+        holder["bot"].run_forever()
+
+    threading.Thread(target=start_bot, daemon=True).start()
+    if not args.no_browser:
+        threading.Thread(target=open_page_when_ready, args=(args.port,), daemon=True).start()
+    print(f"APEX active bot running. Open {url}  (Ctrl+C to stop)")
+    serve(holder, args.port, DATA / "active_state.json")
+
+
+if __name__ == "__main__":
+    main()

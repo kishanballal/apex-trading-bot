@@ -12,8 +12,8 @@ if not exist .venv\finbert1.flag (
   .venv\Scripts\python.exe -m pip install transformers
   echo ok> .venv\finbert1.flag
 )
-echo Starting the active bot. The first start downloads two weeks of 1-minute data (under a minute).
-start "" http://127.0.0.1:8001
+echo Starting the active bot. The page opens by itself in a few seconds.
+echo If you close the page, open http://127.0.0.1:8001 again while this window stays open.
 .venv\Scripts\python.exe -m apex.active || goto :error
 goto :eof
 :error
