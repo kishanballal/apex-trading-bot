@@ -82,6 +82,9 @@
       <div class="scroll"><table><thead><tr><th>Exit</th><th>Stock</th><th>Rule</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th>Why</th></tr></thead><tbody id="trades"></tbody></table></div></div>
   </div>
   <div>
+    <div class="panel"><h2>Rule comparison (same days, same timing)</h2>
+      <div class="scroll"><table><thead><tr><th>Rule set</th><th class="num">Trades</th><th class="num">Wins</th><th class="num">Net P&amp;L</th></tr></thead><tbody id="variants"></tbody></table></div>
+      <p class="muted" style="margin:8px 0 0">Judge these after 2 to 3 weeks, not after a day.</p></div>
     <div class="panel"><h2>Equity</h2><div id="chart"></div></div>
     <div class="panel"><h2>Open positions</h2>
       <div class="scroll"><table><thead><tr><th>Stock</th><th>Rule</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div></div>
@@ -131,6 +134,7 @@ async function load() {
   rows("trades", s.trades, t => `<tr><td>${tm(t.exit_ts)}</td><td>${esc(t.symbol)}</td><td class="muted">${t.rule.replace("_", " ")}</td>
     <td class="num">${t.entry.toFixed(2)}</td><td class="num">${t.exit.toFixed(2)}</td>
     <td class="num ${cls(t.pnl)}">${inr(t.pnl)}</td><td class="muted">${t.reason}</td></tr>`, "No trades yet.");
+  rows("variants", s.variants || [], v => `<tr><td>${esc(v.name)}</td><td class="num">${v.trades}</td><td class="num">${v.wins}</td><td class="num ${cls(v.net)}">${inr(v.net)}</td></tr>`, "calculating…");
   rows("positions", s.positions, p => `<tr><td>${esc(p.symbol)}</td><td class="muted">${p.rule.replace("_", " ")}</td>
     <td class="num">${p.entry.toFixed(2)}</td><td class="num down">${p.stop.toFixed(2)}</td><td class="num up">${p.target.toFixed(2)}</td>
     <td class="num ${cls(p.unrealized)}">${inr(p.unrealized)}</td></tr>`, "Nothing open.");

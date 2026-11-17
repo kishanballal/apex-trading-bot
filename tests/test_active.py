@@ -153,3 +153,19 @@ def test_fill_waits_for_the_first_bar_after_the_bot_saw_the_signal():
     # Signal on bar 11 closes at bar 12's open, seen 6 minutes later (inside bar 13),
     # so the honest fill is bar 14's open.
     assert r.trades[0]["entry_ts"] == int(f.ts[14])
+
+
+def test_old_news_does_not_justify_a_chase_but_only_after_the_switch():
+    f = _frame("spike")
+    t = int(f.ts[10])
+    old = _news("A", 1, t - 3 * 3600_000)            # good news, three hours before the jump
+    before = engine.replay({"A": f}, old, DAY0)       # v3_from_ms=0 means new rules apply
+    assert before.trades == [] and any("old" in e["action"] for e in before.events)
+    legacy = engine.replay({"A": f}, old, DAY0, engine.ActiveConfig(v3_from_ms=2**62))
+    assert len(legacy.trades) == 1                     # history before the switch is unchanged
+
+
+def test_rules_can_be_switched_off():
+    f = _frame("drop")
+    r = engine.replay({"A": f}, EMPTY, DAY0, engine.ActiveConfig(rules=("news_momentum",)))
+    assert r.trades == [] and any("switched off" in e["action"] for e in r.events)

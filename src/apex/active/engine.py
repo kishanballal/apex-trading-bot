@@ -55,6 +55,12 @@ class ActiveConfig:
     max_hold_ms: int = 120 * MIN
     max_fill_wait_ms: int = 5 * MIN   # give up on an entry if no price arrives in time
     target_atr: float = 3.0
+    # A headline only explains a spike if it came out shortly before it. Older news is
+    # usually priced in already (17 Nov: every chase on 1-6 hour old news bought the top).
+    momentum_news_max_age_ms: int = 45 * MIN
+    no_reentry_after_stop: bool = True     # one stop-out per stock per day is enough
+    rules: tuple[str, ...] = ("news_momentum", "dip_bounce")
+    v3_from_ms: int = 0     # the two rules above only apply to signals from this time on
 
 
 RULE_STOPS = {"news_momentum": 1.5, "dip_bounce": 2.0}
@@ -84,13 +90,15 @@ class Result:
     today: dict = field(default_factory=dict)
 
 
-def news_context(news: pd.DataFrame, symbol: str, t_close: int, cfg: ActiveConfig) -> dict:
+def news_context(news: pd.DataFrame, symbol: str, t_close: int, cfg: ActiveConfig,
+                 window_ms: int | None = None) -> dict:
     """Headlines about `symbol` that the bot had already fetched by the bar's close."""
+    window_ms = cfg.news_window_ms if window_ms is None else window_ms
     if news.empty:
         return {"count": 0, "tone": 0.0, "top": ""}
     pub = news.published_ms.where(news.published_ms > 0, news.fetched_ms)
     m = (news.symbol == symbol) & (news.fetched_ms <= t_close + cfg.live_grace_ms) & (
-        pub >= t_close - cfg.news_window_ms) & (pub <= t_close + cfg.live_grace_ms)
+        pub >= t_close - window_ms) & (pub <= t_close + cfg.live_grace_ms)
     rel = news[m]
     if rel.empty:
         return {"count": 0, "tone": 0.0, "top": ""}
@@ -136,6 +144,7 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
     pending: dict[str, dict] = {}   # symbol -> entry waiting for the next bar to open
     last_close: dict[str, float] = {}
     cooldown_until: dict[str, int] = {}
+    stopped_today: set[tuple[str, int]] = set()
     day_stats: dict[int, dict] = {}
     halted = ""
 
@@ -165,6 +174,8 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
             if d["stops"] >= cfg.stoploss_guard:
                 d["pause_until"] = ts + cfg.stoploss_pause_ms
         cooldown_until[pos.symbol] = ts + cfg.cooldown_ms
+        if why == "stop":
+            stopped_today.add((pos.symbol, day_of(ts)))
         res.trades.append({"symbol": pos.symbol, "rule": pos.rule, "entry_ts": pos.entry_ts,
                            "exit_ts": ts, "entry": round(pos.entry, 2), "exit": round(px, 2),
                            "qty": round(pos.qty, 4), "pnl": round(pnl, 2),
@@ -197,6 +208,9 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                 why_not = "paused after 3 stop-outs"
             elif ts < cooldown_until.get(s, 0):
                 why_not = "cooldown after last trade"
+            elif (cfg.no_reentry_after_stop and ts >= cfg.v3_from_ms
+                  and (s, day_of(ts)) in stopped_today):
+                why_not = "already stopped out of it today"
             spend = min(cfg.notional, res.cash)
             if not why_not and spend < cfg.notional * 0.5:
                 why_not = "not enough cash"
@@ -242,8 +256,13 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
             res.events.append(ev)
             rule = None
             if spike and a["vwap_dist"][i] > 0:
-                if ctx["tone"] >= cfg.news_positive:
+                fresh = ctx if t_close < cfg.v3_from_ms else news_context(
+                    news, s, t_close, cfg, cfg.momentum_news_max_age_ms)
+                if fresh["tone"] >= cfg.news_positive:
                     rule = "news_momentum"
+                    ev["headline"] = fresh["top"]
+                elif ctx["tone"] >= cfg.news_positive:
+                    ev["action"] = "good news is old (priced in), not chasing"
                 else:
                     ev["action"] = "no positive news, not chasing"
             elif bounce:
@@ -251,6 +270,9 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                     ev["action"] = "bad news, not catching the knife"
                 else:
                     rule = "dip_bounce"
+            if rule is not None and rule not in cfg.rules:
+                ev["action"] = f"{rule} switched off"
+                rule = None
             if rule is None:
                 continue
             seen = a["first_seen"][i]

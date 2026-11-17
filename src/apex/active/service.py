@@ -17,6 +17,7 @@ import threading
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,7 +36,19 @@ STATIC = Path(__file__).parent / "static"
 BAR_MS = bars1m.BAR_MS
 WAKE_AFTER_S = 12      # seconds after each minute closes
 FEATURE_DAYS = 8       # sessions of history the features need (5) plus a margin
-LIVE = engine.ActiveConfig(live_grace_ms=3 * 60_000, max_fill_wait_ms=3 * 60_000)
+# Rules v3 (fresh news for chases, no re-entry after a stop) start after the 17 Nov 2026
+# session, so the trades already made stay exactly as they happened.
+V3_FROM_MS = 1794909600000   # 2026-11-17 15:30 IST
+LIVE = engine.ActiveConfig(live_grace_ms=3 * 60_000, max_fill_wait_ms=3 * 60_000,
+                           v3_from_ms=V3_FROM_MS)
+# Side-by-side "what if" accounts, all replayed from the account start with the same honest
+# timing. They are for judging rules after a few weeks, never for picking one after a day.
+VARIANTS = {
+    "Rules that ran": replace(LIVE, v3_from_ms=2**62),
+    "New rules (fresh news, no re-entry)": replace(LIVE, v3_from_ms=0),
+    "New rules, dip-bounce only": replace(LIVE, v3_from_ms=0, rules=("dip_bounce",)),
+    "New rules, news chases only": replace(LIVE, v3_from_ms=0, rules=("news_momentum",)),
+}
 IST = nse.IST_OFFSET_MS
 
 
@@ -93,6 +106,8 @@ class ActiveBot:
         self.http = httpx.Client(timeout=30, headers={"User-Agent": nse.UA})
         self.news = NewsClient()
         self.state: dict = {}
+        self._variants: list[dict] = []
+        self._variants_ms = 0
         self.last_market_news = 0
         self.news_checked: dict[str, int] = {}
         self.data_errors: list[str] = []
@@ -215,10 +230,30 @@ class ActiveBot:
         news = self.store.news(since_ms=start - self.cfg.news_window_ms)
         res = engine.replay(frames, news, start, self.cfg)
         self.state = self.snapshot(res, frames, new, added, time.time() - t0)
+        self.state["variants"] = self.variants(frames, news, start)
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.state, default=float))
         tmp.replace(self.state_path)
         return self.state
+
+    def variants(self, frames, news, start: int) -> list[dict]:
+        """Every 10 minutes, replay the same history under each rule set."""
+        if now_ms() - self._variants_ms < 10 * 60_000 and self._variants:
+            return self._variants
+        out = []
+        for name, cfg in VARIANTS.items():
+            try:
+                r = engine.replay(frames, news, start, cfg)
+            except Exception:
+                log.exception("variant %s failed", name)
+                continue
+            t = r.trades
+            out.append({"name": name, "trades": len(t),
+                        "wins": sum(1 for x in t if x["pnl"] > 0),
+                        "net": round(sum(x["pnl"] for x in t), 2),
+                        "open": len(r.positions)})
+        self._variants, self._variants_ms = out, now_ms()
+        return out
 
     def snapshot(self, res: engine.Result, frames, new_bars: int, new_news: int,
                  secs: float) -> dict:
