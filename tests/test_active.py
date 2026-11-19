@@ -169,3 +169,25 @@ def test_rules_can_be_switched_off():
     f = _frame("drop")
     r = engine.replay({"A": f}, EMPTY, DAY0, engine.ActiveConfig(rules=("news_momentum",)))
     assert r.trades == [] and any("switched off" in e["action"] for e in r.events)
+
+
+def test_one_trade_per_headline():
+    a, b = _frame("spike"), _frame("spike")
+    t = int(a.ts[10])
+    both = pd.concat([_news("A", 1, t - 600_000), _news("B", 1, t - 600_000)])
+    off = engine.replay({"A": a, "B": b}, both, DAY0)
+    on = engine.replay({"A": a, "B": b}, both, DAY0, engine.ActiveConfig(one_per_headline=True))
+    assert len(off.trades) == 2 and len(on.trades) == 1
+    assert any("this headline" in e["action"] for e in on.events)
+
+
+def test_breakeven_stop_lifts_after_a_gain():
+    f = _frame("drop", n=40)
+    f.loc[13, "high"] = 101.0                   # up about 1% two bars after buying
+    f.loc[14:, ["open", "high"]] = 100.3          # holds up for a bar
+    f.loc[15, ["low", "close"]] = [99.0, 99.0]  # then falls back below the buy price
+    r = engine.replay({"A": f}, EMPTY, DAY0, engine.ActiveConfig(breakeven_after=0.005))
+    t = r.trades[0]
+    assert t["reason"] == "stop" and t["exit"] > t["entry"]   # sold at breakeven, not the stop
+    plain = engine.replay({"A": f}, EMPTY, DAY0)
+    assert plain.trades[0]["exit"] < t["exit"]

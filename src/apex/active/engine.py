@@ -61,6 +61,9 @@ class ActiveConfig:
     no_reentry_after_stop: bool = True     # one stop-out per stock per day is enough
     rules: tuple[str, ...] = ("news_momentum", "dip_bounce")
     v3_from_ms: int = 0     # the two rules above only apply to signals from this time on
+    # Ideas being tried in the comparison table only (off for the live account):
+    one_per_headline: bool = False   # one sector-roundup article should not become 3 bets
+    breakeven_after: float = 0.0     # once up this much, lift the stop to cover fees
 
 
 RULE_STOPS = {"news_momentum": 1.5, "dip_bounce": 2.0}
@@ -145,6 +148,7 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
     last_close: dict[str, float] = {}
     cooldown_until: dict[str, int] = {}
     stopped_today: set[tuple[str, int]] = set()
+    headlines_used: set[tuple[str, int]] = set()
     day_stats: dict[int, dict] = {}
     halted = ""
 
@@ -208,6 +212,9 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                 why_not = "paused after 3 stop-outs"
             elif ts < cooldown_until.get(s, 0):
                 why_not = "cooldown after last trade"
+            elif (cfg.one_per_headline and order["news"]
+                  and (order["news"], day_of(ts)) in headlines_used):
+                why_not = "already bought on this headline today"
             elif (cfg.no_reentry_after_stop and ts >= cfg.v3_from_ms
                   and (s, day_of(ts)) in stopped_today):
                 why_not = "already stopped out of it today"
@@ -219,6 +226,8 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                 o = float(A[s]["open"][i])
                 price = o * (1 + cfg.slippage)
                 qty = spend / (price * (1 + cfg.fee))
+                if order["news"]:
+                    headlines_used.add((order["news"], day_of(ts)))
                 res.cash -= qty * price * (1 + cfg.fee)
                 open_pos[s] = Position(
                     s, order["rule"], ts, price, qty,
@@ -241,6 +250,9 @@ def replay(frames: dict[str, pd.DataFrame], news: pd.DataFrame, start_ms: int,
                 close(pos, ts, c, "time")
             elif a["is_last_"][i]:
                 close(pos, ts, c, "session end")
+            elif cfg.breakeven_after and h >= pos.entry * (1 + cfg.breakeven_after):
+                # takes effect from the next bar, so this bar's low cannot hit it
+                pos.stop = max(pos.stop, pos.entry * (1 + 2 * cfg.fee + 2 * cfg.slippage))
         # 3) signals on this bar's close
         for s, i in signals.get(ts, ()):
             a = A[s]

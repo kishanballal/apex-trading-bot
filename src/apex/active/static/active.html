@@ -51,6 +51,14 @@
   .tag.bounce { background: rgba(77,163,255,.15); color: var(--blue); }
   .empty { padding: 18px 12px; color: var(--muted); }
   #chart { height: 220px; }
+  #pchart { height: 340px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 12px 0; }
+  .tab { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font: inherit;
+    padding: 5px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+  .tab.on { border-color: var(--pink); box-shadow: 0 0 0 1px var(--pink) inset; }
+  .tab .open { color: var(--amber); font-size: 10px; letter-spacing: 1px; margin-left: 4px; }
+  .pinfo { padding: 8px 12px; color: var(--muted); }
+  .pinfo b { color: var(--text); font-weight: 600; }
   a { color: var(--text); text-decoration: none; } a:hover { color: var(--pink); }
   .note { color: var(--muted); font-size: 11px; padding: 0 2px 10px; }
   @media (max-width: 1000px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid { grid-template-columns: minmax(0, 1fr); } }
@@ -74,6 +82,10 @@
   <div class="kpi"><div class="label">Feeds</div><div class="value" id="k-feeds">–</div><div class="sub" id="k-feeds-sub"></div></div>
 </div>
 <div class="note" id="note"></div>
+<div class="panel"><h2><span class="dot"></span>Stocks bought today: price chart</h2>
+  <div class="tabs" id="ptabs"></div>
+  <div class="pinfo" id="pinfo">No stocks bought today yet.</div>
+  <div id="pchart"></div></div>
 <div class="grid">
   <div>
     <div class="panel"><h2><span class="dot"></span>Sudden moves and what the bot did</h2>
@@ -106,6 +118,8 @@ async function load() {
   let s;
   try { s = await (await fetch("/api/state")).json(); } catch { $("updated").textContent = "bot not reachable"; return; }
   if (s.loading) { $("updated").textContent = "first download running, about a minute…"; return; }
+  pstate = s;
+  try { drawTabs(s); drawPrice(); } catch (e) { console.error(e); }
   $("updated").textContent = "updated " + tm(s.generated_ms);
   $("mkt").textContent = s.market_open ? "NSE open" : "NSE closed";
   $("mkt").className = "badge " + (s.market_open ? "ok" : "");
@@ -152,6 +166,71 @@ async function load() {
     for (const p of s.equity_curve) { const t = Math.floor((p.ts + 19800000) / 1000); if (t > last) { pts.push({time: t, value: p.equity}); last = t; } }
     if (pts.length) series.setData(pts);
   }
+}
+// ---- price chart of the stocks bought today ----
+let pchart, pseries, plines = [], psel = null, pstate = null, pfitted = null;
+const IST_S = 19800;
+const dayOf = ms => Math.floor((ms + 19800000) / 86400000);
+const px = v => "₹" + Number(v).toLocaleString("en-IN", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+function boughtToday(s) {
+  const today = dayOf(s.latest_bar_ms || s.generated_ms);
+  const out = new Map();
+  for (const p of s.positions || []) out.set(p.symbol, {open: p, closed: []});
+  for (const t of [...(s.trades || [])].reverse()) {
+    if (dayOf(t.entry_ts) !== today) continue;
+    if (!out.has(t.symbol)) out.set(t.symbol, {open: null, closed: []});
+    out.get(t.symbol).closed.push(t);
+  }
+  return out;
+}
+function drawTabs(s) {
+  const list = boughtToday(s);
+  if (!list.size) { $("ptabs").innerHTML = ""; $("pinfo").textContent = "No stocks bought today yet."; return; }
+  if (!psel || !list.has(psel)) psel = list.keys().next().value;
+  $("ptabs").innerHTML = [...list].map(([sym, v]) => {
+    const pnl = (v.open ? v.open.unrealized : 0) + v.closed.reduce((a, t) => a + t.pnl, 0);
+    return `<button class="tab ${sym === psel ? "on" : ""}" data-sym="${esc(sym)}">${esc(sym)}
+      <span class="${cls(pnl)}">${inr(pnl)}</span>${v.open ? '<span class="open">OPEN</span>' : ""}</button>`;
+  }).join("");
+  for (const b of $("ptabs").querySelectorAll("button"))
+    b.onclick = () => { psel = b.dataset.sym; drawTabs(pstate); drawPrice(); };
+}
+async function drawPrice() {
+  if (!psel || !window.LightweightCharts) return;
+  const sym = psel, v = boughtToday(pstate).get(sym);
+  let bars = [];
+  try { bars = await (await fetch("/api/candles/" + encodeURIComponent(sym))).json(); } catch { return; }
+  if (sym !== psel) return;
+  if (!pchart) {
+    pchart = LightweightCharts.createChart($("pchart"), {layout: {background: {color: "transparent"}, textColor: "#6f7f97"},
+      grid: {vertLines: {color: "#121823"}, horzLines: {color: "#121823"}},
+      timeScale: {timeVisible: true, secondsVisible: false, borderColor: "#1c2533"}, rightPriceScale: {borderColor: "#1c2533"}});
+    pseries = pchart.addCandlestickSeries({upColor: "#2ee6a6", downColor: "#ff4d6d", borderVisible: false,
+      wickUpColor: "#2ee6a6", wickDownColor: "#ff4d6d"});
+    new ResizeObserver(() => pchart.applyOptions({width: $("pchart").clientWidth})).observe($("pchart"));
+  }
+  pseries.setData(bars.map(b => ({time: Math.floor(b.ts / 1000) + IST_S, open: b.open, high: b.high, low: b.low, close: b.close})));
+  if (pfitted !== sym) { pchart.timeScale().fitContent(); pfitted = sym; }   // whole day on first view
+  const marks = [];
+  for (const t of v.closed) {
+    marks.push({time: Math.floor(t.entry_ts / 1000) + IST_S, position: "belowBar", color: "#4da3ff", shape: "arrowUp", text: "Buy " + px(t.entry)});
+    marks.push({time: Math.floor(t.exit_ts / 1000) + IST_S, position: "aboveBar", color: t.pnl >= 0 ? "#2ee6a6" : "#ff4d6d", shape: "arrowDown", text: "Sold " + inr(t.pnl)});
+  }
+  if (v.open) marks.push({time: Math.floor(v.open.entry_ts / 1000) + IST_S, position: "belowBar", color: "#4da3ff", shape: "arrowUp", text: "Buy " + px(v.open.entry)});
+  marks.sort((a, b) => a.time - b.time);
+  pseries.setMarkers(marks);
+  for (const l of plines) pseries.removePriceLine(l);
+  plines = [];
+  if (v.open) {
+    const line = (price, color, title) => plines.push(pseries.createPriceLine({price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title}));
+    line(v.open.entry, "#4da3ff", "bought"); line(v.open.stop, "#ff4d6d", "stop"); line(v.open.target, "#2ee6a6", "target");
+  }
+  const last = bars.length ? bars[bars.length - 1].close : null;
+  const parts = [`<b>${esc(sym)}</b>`, last != null ? `price now <b>${px(last)}</b>` : ""];
+  if (v.open) parts.push(`bought ${tm(v.open.entry_ts)} at ${px(v.open.entry)}`, `stop ${px(v.open.stop)}`, `target ${px(v.open.target)}`,
+    `open P&L <b class="${cls(v.open.unrealized)}">${inr(v.open.unrealized)}</b>`);
+  for (const t of v.closed) parts.push(`bought ${tm(t.entry_ts)} at ${px(t.entry)}, sold ${tm(t.exit_ts)} at ${px(t.exit)} (${esc(t.reason)}) <b class="${cls(t.pnl)}">${inr(t.pnl)}</b>`);
+  $("pinfo").innerHTML = parts.filter(Boolean).join(" · ");
 }
 load(); setInterval(load, 30000);
 </script>

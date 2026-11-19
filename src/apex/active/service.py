@@ -48,6 +48,9 @@ VARIANTS = {
     "New rules (fresh news, no re-entry)": replace(LIVE, v3_from_ms=0),
     "New rules, dip-bounce only": replace(LIVE, v3_from_ms=0, rules=("dip_bounce",)),
     "New rules, news chases only": replace(LIVE, v3_from_ms=0, rules=("news_momentum",)),
+    "New rules + one trade per headline": replace(LIVE, v3_from_ms=0, one_per_headline=True),
+    "New rules + breakeven stop after +0.5%": replace(LIVE, v3_from_ms=0,
+                                                      breakeven_after=0.005),
 }
 IST = nse.IST_OFFSET_MS
 
@@ -318,6 +321,26 @@ def open_page_when_ready(port: int) -> None:
         time.sleep(0.5)
 
 
+def day_candles(db_path: Path, symbol: str) -> list[dict]:
+    """1-minute candles for `symbol` on its latest session day, for the price chart.
+    Opens its own read-only connection so the page never blocks the bot."""
+    import sqlite3
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)
+    try:
+        last = con.execute("SELECT MAX(ts) FROM bars WHERE symbol=?", (symbol,)).fetchone()[0]
+        if not last:
+            return []
+        day0 = (last + IST) // 86_400_000 * 86_400_000 - IST
+        rows = con.execute("SELECT ts, open, high, low, close, volume FROM bars WHERE symbol=? "
+                           "AND ts >= ? ORDER BY ts", (symbol, day0)).fetchall()
+    finally:
+        con.close()
+    return [{"ts": r[0], "open": r[1], "high": r[2], "low": r[3], "close": r[4], "volume": r[5]}
+            for r in rows]
+
+
 def serve(holder: dict, port: int, state_path: Path) -> None:
     """Web page. Starts at once; the bot itself (FinBERT, data) loads in the background."""
     import uvicorn
@@ -345,6 +368,10 @@ def serve(holder: dict, port: int, state_path: Path) -> None:
             except ValueError:
                 pass
         return JSONResponse({"loading": True})
+
+    @api.get("/api/candles/{symbol}")
+    def candles(symbol: str):
+        return JSONResponse(day_candles(state_path.parent / "active1m.db", symbol))
 
     uvicorn.run(api, host="127.0.0.1", port=port, log_level="warning")
 
